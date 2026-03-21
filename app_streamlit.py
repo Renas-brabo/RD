@@ -110,12 +110,16 @@ def run_pipeline(
     tmp_path = None
 
     if use_repo_rmd:
-        cfg["ARQUIVO_RMD"] = repo_rmd_path
+        if not repo_rmd_path or not repo_rmd_path.strip():
+            raise ValueError("O caminho do RMD no repositório está vazio.")
+        cfg["ARQUIVO_RMD"] = repo_rmd_path.strip()
     else:
+        if rmd_uploaded_file is None:
+            raise ValueError("Nenhum arquivo RMD foi enviado.")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
             tmp.write(rmd_uploaded_file.getbuffer())
             tmp_path = tmp.name
-
+        
     cfg["ARQUIVO_RMD"] = tmp_path
     cfg["LOG_TO_CONSOLE"] = False
     cfg["LOG_TO_FILE"] = True
@@ -134,7 +138,11 @@ def run_pipeline(
     try:
         logger.info("Iniciando execução pelo Streamlit.")
         validate_config(cfg)
+        logger.info("Caminho final do ARQUIVO_RMD: %s", cfg.get("ARQUIVO_RMD"))
 
+        if not cfg.get("ARQUIVO_RMD"):
+            raise ValueError("ARQUIVO_RMD não foi definido antes da coleta.")
+    
         raw = collect_data(cfg, logger)
         processed, warnings = process_data(raw, cfg, logger)
         export_tables = build_export_tables(processed, logger)
@@ -202,7 +210,7 @@ use_repo_rmd = st.sidebar.checkbox(
 
 repo_rmd_path = st.sidebar.text_input(
     "Caminho do RMD no repositório",
-    value=default_cfg.get("ARQUIVO_RMD", "rmd/Anexo_RMD_Janeiro_26.xlsx"),
+    value="rmd/Anexo_RMD_Janeiro_26.xlsx",
 )
 
 uploaded_rmd = None
