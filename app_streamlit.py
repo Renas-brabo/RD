@@ -87,6 +87,8 @@ def prepare_preview_df(df: pd.DataFrame, mode: str, max_rows: int) -> pd.DataFra
 
 def run_pipeline(
     rmd_uploaded_file,
+    use_repo_rmd: bool,
+    repo_rmd_path: str,
     output_name: str,
     start_sgs: str,
     days_daily_sgs: int,
@@ -105,9 +107,14 @@ def run_pipeline(
     cfg["ABA_RMD"] = aba_rmd
     cfg["RMD_EXTRACTION_MODE"] = rmd_extraction_mode
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-        tmp.write(rmd_uploaded_file.getbuffer())
-        tmp_path = tmp.name
+    tmp_path = None
+
+    if use_repo_rmd:
+        cfg["ARQUIVO_RMD"] = repo_rmd_path
+    else:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            tmp.write(rmd_uploaded_file.getbuffer())
+            tmp_path = tmp.name
 
     cfg["ARQUIVO_RMD"] = tmp_path
     cfg["LOG_TO_CONSOLE"] = False
@@ -166,7 +173,7 @@ def run_pipeline(
         }
 
     finally:
-        if os.path.exists(tmp_path):
+        if tmp_path and os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)
             except Exception:
@@ -188,10 +195,22 @@ st.sidebar.header("Parâmetros de execução")
 
 default_cfg = get_config()
 
-uploaded_rmd = st.sidebar.file_uploader(
-    "Envie o arquivo RMD (.xlsx)",
-    type=["xlsx"],
+use_repo_rmd = st.sidebar.checkbox(
+    "Usar RMD padrão do repositório",
+    value=True,
 )
+
+repo_rmd_path = st.sidebar.text_input(
+    "Caminho do RMD no repositório",
+    value=default_cfg.get("ARQUIVO_RMD", "rmd/Anexo_RMD_Janeiro_26.xlsx"),
+)
+
+uploaded_rmd = None
+if not use_repo_rmd:
+    uploaded_rmd = st.sidebar.file_uploader(
+        "Envie o arquivo RMD (.xlsx)",
+        type=["xlsx"],
+    )
 
 output_name = st.sidebar.text_input(
     "Nome do arquivo Excel de saída",
@@ -250,12 +269,14 @@ rmd_extraction_mode = (
 run_button = st.sidebar.button("Executar pipeline", type="primary")
 
 if run_button:
-    if uploaded_rmd is None:
-        st.error("Envie primeiro o arquivo RMD (.xlsx).")
+    if not use_repo_rmd and uploaded_rmd is None:
+        st.error("Envie primeiro o arquivo RMD (.xlsx) ou marque o uso do RMD do repositório.")
     else:
         with st.spinner("Executando coleta, processamento e exportação..."):
             result = run_pipeline(
                 rmd_uploaded_file=uploaded_rmd,
+                use_repo_rmd=use_repo_rmd,
+                repo_rmd_path=repo_rmd_path,
                 output_name=output_name,
                 start_sgs=start_sgs,
                 days_daily_sgs=days_daily_sgs,
