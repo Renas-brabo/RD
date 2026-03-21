@@ -65,7 +65,7 @@ def get_config() -> dict:
     return {
         "START_SGS": "2019-01-01",
         "DAYS_DAILY_SGS": 7,
-        "ARQUIVO_RMD": "Anexo RMD_Janeiro_26.xlsx",
+        "ARQUIVO_RMD": "rmd/Anexo RMD_Janeiro_26.xlsx",
         "ABA_RMD": "2.1",
         "MES_ALVO": "Dez",
         "ANO_INICIO_RMD": 2020,
