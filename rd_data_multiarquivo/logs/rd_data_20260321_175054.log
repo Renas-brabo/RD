@@ -1,0 +1,40 @@
+2026-03-21 17:50:54 | INFO | rd_data | Iniciando execução pelo Streamlit.
+2026-03-21 17:50:54 | INFO | rd_data | Iniciando coleta de dados SGS mensais, diários e anuais.
+2026-03-21 17:51:07 | INFO | rd_data | Coleta mensal concluída com 87 linhas e 31 colunas.
+2026-03-21 17:51:07 | INFO | rd_data | Coleta diária concluída com 36 linhas e 1 colunas (janela iniciada em 2026-01-28).
+2026-03-21 17:51:10 | INFO | rd_data | Coleta anual concluída com 7 linhas e 13 colunas.
+2026-03-21 17:51:10 | INFO | rd_data | Coletando séries SIDRA de população e desemprego.
+2026-03-21 17:51:11 | INFO | rd_data | Coletando série SIDRA de taxa de desocupação em trimestre móvel mensal (tabela 6381).
+2026-03-21 17:51:11 | INFO | rd_data | Extraindo DPF do arquivo RMD: /var/folders/pc/bwzcb2zj4n1g1xsf4hz_tm980000gn/T/tmputg5y1qk.xlsx
+2026-03-21 17:51:15 | INFO | rd_data | Validação dos dados brutos concluída com sucesso.
+2026-03-21 17:51:15 | INFO | rd_data | Iniciando processamento dos dados brutos.
+2026-03-21 17:51:15 | INFO | rd_data | Views anuais de PIB e setor externo preparadas.
+2026-03-21 17:51:15 | INFO | rd_data | Bloco de câmbio diário preparado com 7 linhas.
+2026-03-21 17:51:15 | INFO | rd_data | Blocos mensais preparados: preços=87 linhas, externo=87 linhas, fiscal=87 linhas.
+2026-03-21 17:51:15 | INFO | rd_data | Bloco anual de preços e juros preparado com 8 linhas.
+2026-03-21 17:51:15 | INFO | rd_data | Saídas anuais complementares preparadas.
+2026-03-21 17:51:15 | INFO | rd_data | Validação dos dados processados concluída.
+2026-03-21 17:51:15 | INFO | rd_data | Montando tabelas finais de exportação.
+2026-03-21 17:51:15 | INFO | rd_data | Tabelas de exportação montadas e validadas com sucesso.
+2026-03-21 17:51:15 | INFO | rd_data | Padronizando nomenclatura das colunas exportadas.
+2026-03-21 17:51:15 | INFO | rd_data | Padronização de nomenclatura concluída.
+2026-03-21 17:51:15 | INFO | rd_data | Iniciando exportação para Excel: /Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/Recent Developments Data.xlsx
+2026-03-21 17:51:15 | INFO | rd_data | Exportando aba 'Mensal_Monetario' com 87 linhas e 13 colunas.
+2026-03-21 17:51:15 | INFO | rd_data | Exportando aba 'Mensal_Fiscal' com 87 linhas e 15 colunas.
+2026-03-21 17:51:15 | INFO | rd_data | Exportando aba 'câmbio diário' com 7 linhas e 3 colunas.
+2026-03-21 17:51:15 | INFO | rd_data | Exportando aba 'Mensal_Externo' com 87 linhas e 13 colunas.
+2026-03-21 17:51:15 | INFO | rd_data | Exportando aba 'Trimestral_Pop_Desemp' com 24 linhas e 3 colunas.
+2026-03-21 17:51:15 | INFO | rd_data | Exportando aba 'PIB_e_outros' com 7 linhas e 13 colunas.
+2026-03-21 17:51:15 | INFO | rd_data | Exportando aba 'Anual_Precos_Juros' com 8 linhas e 5 colunas.
+2026-03-21 17:51:15 | INFO | rd_data | Exportando aba 'Anual_SetorExterno' com 7 linhas e 8 colunas.
+2026-03-21 17:51:15 | INFO | rd_data | Exportação concluída com sucesso.
+2026-03-21 17:51:15 | INFO | rd_data | Resumo final da execução:
+2026-03-21 17:51:15 | INFO | rd_data | - arquivo Excel: /Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/Recent Developments Data.xlsx
+2026-03-21 17:51:15 | INFO | rd_data | - arquivo de log da execução: /Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/logs/rd_data_20260321_175054.log
+2026-03-21 17:51:15 | INFO | rd_data | - arquivo de log de erros: /Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/logs/rd_data_errors_20260321_175054.log
+2026-03-21 17:51:15 | INFO | rd_data | - arquivo de log rotativo: /Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/logs/current/rd_data_current.log
+2026-03-21 17:51:15 | INFO | rd_data | - total de abas exportadas: 8
+2026-03-21 17:51:15 | INFO | rd_data | - total de linhas exportadas: 314
+2026-03-21 17:51:15 | INFO | rd_data | - total de colunas exportadas: 73
+2026-03-21 17:51:15 | INFO | rd_data | - tempo total (s): 20.974
+2026-03-21 17:51:15 | INFO | rd_data | Validações concluídas sem avisos.

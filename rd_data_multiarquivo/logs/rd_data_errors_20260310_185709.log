@@ -1,0 +1,9 @@
+2026-03-10 18:57:09 | ERROR | rd_data | Falha na execução do script: get() got an unexpected keyword argument 'output'
+Traceback (most recent call last):
+  File "C:\Users\User\OneDrive - Tesouro Nacional\Documentos\Trabalhos\Dívida\Emissão Externa\Recent Developments\RD-dados-automatizados\Coleta de Dados\rd_data_multiarquivo\main.py", line 30, in main
+    raw = collect_data(cfg, logger)
+  File "C:\Users\User\OneDrive - Tesouro Nacional\Documentos\Trabalhos\Dívida\Emissão Externa\Recent Developments\RD-dados-automatizados\Coleta de Dados\rd_data_multiarquivo\collectors.py", line 11, in collect_data
+    dados_mensais_raw = fetch_sgs(cfg["series_mensais"], cfg["START_SGS"])
+  File "C:\Users\User\OneDrive - Tesouro Nacional\Documentos\Trabalhos\Dívida\Emissão Externa\Recent Developments\RD-dados-automatizados\Coleta de Dados\rd_data_multiarquivo\utils.py", line 28, in fetch_sgs
+    raws = sgs.get(list(series.values()), start=start, output="text")
+TypeError: get() got an unexpected keyword argument 'output'

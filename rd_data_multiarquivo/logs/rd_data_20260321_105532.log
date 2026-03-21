@@ -1,0 +1,29 @@
+2026-03-21 10:55:32 | INFO | rd_data | Iniciando execução do script Recent Developments Data.
+2026-03-21 10:55:32 | INFO | rd_data | Arquivo de log desta execução: /Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/logs/rd_data_20260321_105532.log
+2026-03-21 10:55:32 | INFO | rd_data | Arquivo de log de erros desta execução: /Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/logs/rd_data_errors_20260321_105532.log
+2026-03-21 10:55:32 | INFO | rd_data | Arquivo de log rotativo corrente: /Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/logs/current/rd_data_current.log
+2026-03-21 10:55:32 | INFO | rd_data | Configuração validada com sucesso.
+2026-03-21 10:55:32 | INFO | rd_data | Iniciando coleta de dados SGS mensais, diários e anuais.
+2026-03-21 10:55:40 | INFO | rd_data | Coleta mensal concluída com 87 linhas e 31 colunas.
+2026-03-21 10:55:40 | INFO | rd_data | Coleta diária concluída com 1814 linhas e 1 colunas.
+2026-03-21 10:55:43 | INFO | rd_data | Coleta anual concluída com 7 linhas e 13 colunas.
+2026-03-21 10:55:43 | INFO | rd_data | Coletando séries SIDRA de população e desemprego.
+2026-03-21 10:55:44 | INFO | rd_data | Extraindo DPF do arquivo RMD: Anexo RMD_Janeiro_26.xlsx
+2026-03-21 10:55:46 | INFO | rd_data | Validação dos dados brutos concluída com sucesso.
+2026-03-21 10:55:46 | INFO | rd_data | Iniciando processamento dos dados brutos.
+2026-03-21 10:55:46 | INFO | rd_data | Views anuais de PIB e setor externo preparadas.
+2026-03-21 10:55:46 | INFO | rd_data | Bloco de câmbio diário preparado com 7 linhas.
+2026-03-21 10:55:46 | INFO | rd_data | Blocos mensais preparados: preços=87 linhas, externo=87 linhas, fiscal=87 linhas.
+2026-03-21 10:55:46 | INFO | rd_data | Bloco anual de preços e juros preparado com 8 linhas.
+2026-03-21 10:55:46 | INFO | rd_data | Saídas anuais complementares preparadas.
+2026-03-21 10:55:46 | ERROR | rd_data | Falha na execução do script: cambio_diario: colunas obrigatórias ausentes: ['Data']
+Traceback (most recent call last):
+  File "/Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/main.py", line 31, in main
+    processed, warnings = process_data(raw, cfg, logger)
+  File "/Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/processors.py", line 223, in process_data
+    warnings = validate_processed_data(processed)
+  File "/Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/validators.py", line 86, in validate_processed_data
+    require_columns(processed["cambio_diario"], ["Data", "Cambio_diario", "Variacao_cambial_diaria_%"], "cambio_diario")
+  File "/Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/validators.py", line 9, in require_columns
+    raise ValueError(f"{df_name}: colunas obrigatórias ausentes: {missing}")
+ValueError: cambio_diario: colunas obrigatórias ausentes: ['Data']

@@ -1,0 +1,11 @@
+2026-03-21 10:55:46 | ERROR | rd_data | Falha na execução do script: cambio_diario: colunas obrigatórias ausentes: ['Data']
+Traceback (most recent call last):
+  File "/Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/main.py", line 31, in main
+    processed, warnings = process_data(raw, cfg, logger)
+  File "/Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/processors.py", line 223, in process_data
+    warnings = validate_processed_data(processed)
+  File "/Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/validators.py", line 86, in validate_processed_data
+    require_columns(processed["cambio_diario"], ["Data", "Cambio_diario", "Variacao_cambial_diaria_%"], "cambio_diario")
+  File "/Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/validators.py", line 9, in require_columns
+    raise ValueError(f"{df_name}: colunas obrigatórias ausentes: {missing}")
+ValueError: cambio_diario: colunas obrigatórias ausentes: ['Data']

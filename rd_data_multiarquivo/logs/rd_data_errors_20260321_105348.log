@@ -1,0 +1,17 @@
+2026-03-21 10:54:40 | ERROR | rd_data | Falha na execução do script: [Errno 2] No such file or directory: 'Anexo RMD_Janeiro_26.xlsx'
+Traceback (most recent call last):
+  File "/Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/main.py", line 30, in main
+    raw = collect_data(cfg, logger)
+  File "/Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/collectors.py", line 25, in collect_data
+    out_dpf_raw = extrai_dpf_dez(cfg["ARQUIVO_RMD"], cfg["ABA_RMD"], cfg["MES_ALVO"], cfg["ANO_INICIO_RMD"], cfg["PT_MESES"])
+  File "/Users/Renato/Library/CloudStorage/OneDrive-TesouroNacional/Documentos/Trabalhos/COGEP/Emissão Externa/Recent Developments/RD-dados-automatizados/Coleta de Dados/rd_data_multiarquivo/utils.py", line 179, in extrai_dpf_dez
+    xl = pd.ExcelFile(arquivo, engine="openpyxl")
+  File "/Users/Renato/Library/Python/3.9/lib/python/site-packages/pandas/io/excel/_base.py", line 1695, in __init__
+    self._reader = self._engines[engine](self._io, storage_options=storage_options)
+  File "/Users/Renato/Library/Python/3.9/lib/python/site-packages/pandas/io/excel/_openpyxl.py", line 557, in __init__
+    super().__init__(filepath_or_buffer, storage_options=storage_options)
+  File "/Users/Renato/Library/Python/3.9/lib/python/site-packages/pandas/io/excel/_base.py", line 535, in __init__
+    self.handles = get_handle(
+  File "/Users/Renato/Library/Python/3.9/lib/python/site-packages/pandas/io/common.py", line 865, in get_handle
+    handle = open(handle, ioargs.mode)
+FileNotFoundError: [Errno 2] No such file or directory: 'Anexo RMD_Janeiro_26.xlsx'
