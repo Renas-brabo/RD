@@ -1295,7 +1295,7 @@ st.set_page_config(
 
 st.title("📊 RD Data Dashboard")
 st.caption(
-    "Execução automática do pipeline com busca web do RMD, fallback local e aba adicional 'rmd'."
+    "Execução automática do pipeline com busca web do RMD e, caso falhe, usa arquivo local"
 )
 
 default_cfg = get_config()
