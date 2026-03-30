@@ -3,3 +3,5 @@ openpyxl
 python-bcb
 sidrapy
 lxml
+requests
+beautifulsoup4
