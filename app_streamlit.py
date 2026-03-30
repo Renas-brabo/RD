@@ -52,39 +52,6 @@ def normalize_text(text: str) -> str:
     return text
 
 
-def month_name_to_number(token: str) -> int | None:
-    token = normalize_text(token)
-
-    month_map = {
-        "jan": 1,
-        "janeiro": 1,
-        "fev": 2,
-        "fevereiro": 2,
-        "mar": 3,
-        "marco": 3,
-        "abr": 4,
-        "abril": 4,
-        "mai": 5,
-        "maio": 5,
-        "jun": 6,
-        "junho": 6,
-        "jul": 7,
-        "julho": 7,
-        "ago": 8,
-        "agosto": 8,
-        "set": 9,
-        "setembro": 9,
-        "out": 10,
-        "outubro": 10,
-        "nov": 11,
-        "novembro": 11,
-        "dez": 12,
-        "dezembro": 12,
-    }
-
-    return month_map.get(token)
-
-
 def current_file_signature(path: Path) -> str:
     stat = path.stat()
     return f"{path.resolve()}|{int(stat.st_mtime)}|{stat.st_size}"
@@ -132,6 +99,40 @@ def prepare_preview_df(df: pd.DataFrame, max_rows: int = 50) -> pd.DataFrame:
 # =========================================================
 # Descoberta LOCAL do RMD
 # =========================================================
+def month_name_to_number(token: str) -> int | None:
+    token = normalize_text(token)
+
+    month_map = {
+        "jan": 1,
+        "janeiro": 1,
+        "fev": 2,
+        "fevereiro": 2,
+        "mar": 3,
+        "marco": 3,
+        "março": 3,
+        "abr": 4,
+        "abril": 4,
+        "mai": 5,
+        "maio": 5,
+        "jun": 6,
+        "junho": 6,
+        "jul": 7,
+        "julho": 7,
+        "ago": 8,
+        "agosto": 8,
+        "set": 9,
+        "setembro": 9,
+        "out": 10,
+        "outubro": 10,
+        "nov": 11,
+        "novembro": 11,
+        "dez": 12,
+        "dezembro": 12,
+    }
+
+    return month_map.get(token)
+
+
 def is_excel_temp_file(path: Path) -> bool:
     return path.name.startswith("~$")
 
@@ -185,7 +186,7 @@ def parse_rmd_month_year_from_name(file_path: Path) -> tuple[int, int] | None:
         return year_num, month_num
 
     month_regex = (
-        r"(jan(?:eiro)?|fev(?:ereiro)?|mar(?:co)?|abr(?:il)?|mai(?:o)?|"
+        r"(jan(?:eiro)?|fev(?:ereiro)?|mar(?:co|ço)?|abr(?:il)?|mai(?:o)?|"
         r"jun(?:ho)?|jul(?:ho)?|ago(?:sto)?|set(?:embro)?|out(?:ubro)?|"
         r"nov(?:embro)?|dez(?:embro)?)"
     )
@@ -270,6 +271,46 @@ def build_rmd_page_url(year: int, month: int) -> str:
     )
 
 
+def build_rmd_base_url() -> str:
+    return "https://www.tesourotransparente.gov.br/publicacoes/relatorio-mensal-da-divida-rmd/"
+
+
+def month_number_to_pt_name(month: int) -> str:
+    mapping = {
+        1: "Janeiro",
+        2: "Fevereiro",
+        3: "Março",
+        4: "Abril",
+        5: "Maio",
+        6: "Junho",
+        7: "Julho",
+        8: "Agosto",
+        9: "Setembro",
+        10: "Outubro",
+        11: "Novembro",
+        12: "Dezembro",
+    }
+    return mapping[month]
+
+
+def month_number_to_pt_name_ascii(month: int) -> str:
+    mapping = {
+        1: "Janeiro",
+        2: "Fevereiro",
+        3: "Marco",
+        4: "Abril",
+        5: "Maio",
+        6: "Junho",
+        7: "Julho",
+        8: "Agosto",
+        9: "Setembro",
+        10: "Outubro",
+        11: "Novembro",
+        12: "Dezembro",
+    }
+    return mapping[month]
+
+
 def iter_recent_year_months(max_lookback_months: int = 18):
     """
     Gera pares (ano, mês) do mês atual para trás.
@@ -286,111 +327,217 @@ def iter_recent_year_months(max_lookback_months: int = 18):
 
 
 def fetch_html(url: str, timeout: int = 60) -> str:
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
     resp = requests.get(url, headers=headers, timeout=timeout)
     resp.raise_for_status()
     return resp.text
 
 
-def score_attachment_candidate(full_url: str, text: str) -> int:
-    href_low = full_url.lower()
-    text_low = normalize_text(text)
+def collect_link_candidates_from_html(page_url: str, html: str) -> list[dict]:
+    """
+    Coleta candidatos de link a partir de href e atributos alternativos.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    candidates = []
+
+    def add_candidate(raw_url: str, text: str, source_attr: str):
+        if not raw_url:
+            return
+
+        full_url = urljoin(page_url, raw_url.strip())
+        text = (text or "").strip()
+
+        candidates.append(
+            {
+                "attachment_url": full_url,
+                "anchor_text": text,
+                "source_attr": source_attr,
+            }
+        )
+
+    for a in soup.find_all("a"):
+        text = a.get_text(" ", strip=True)
+
+        for attr in ["href", "data-href", "data-url", "data-download", "download"]:
+            raw = a.get(attr)
+            if raw:
+                add_candidate(raw, text, attr)
+
+    for tag in soup.find_all(attrs={"data-href": True}):
+        add_candidate(tag.get("data-href"), tag.get_text(" ", strip=True), "data-href")
+
+    for tag in soup.find_all(attrs={"data-url": True}):
+        add_candidate(tag.get("data-url"), tag.get_text(" ", strip=True), "data-url")
+
+    return candidates
+
+
+def score_attachment_candidate(
+    candidate: dict,
+    target_year: int | None = None,
+    target_month: int | None = None,
+) -> int:
+    url_low = candidate["attachment_url"].lower()
+    text_low = normalize_text(candidate.get("anchor_text", ""))
 
     score = 0
 
-    if href_low.endswith(".xlsx"):
-        score += 5
-    elif href_low.endswith(".zip"):
-        score += 4
+    if ".xlsx" in url_low:
+        score += 8
+    if ".zip" in url_low:
+        score += 7
+    if ".pdf" in url_low:
+        score -= 5
 
-    if "anexo" in href_low or "anexo" in text_low:
-        score += 3
-    if "rmd" in href_low or "rmd" in text_low:
-        score += 3
-    if "tabela" in href_low or "tabela" in text_low:
+    if "anexo" in url_low or "anexo" in text_low:
+        score += 5
+    if "rmd" in url_low or "rmd" in text_low:
+        score += 5
+    if "tabela" in url_low or "tabela" in text_low:
         score += 2
-    if "anex" in href_low or "anex" in text_low:
-        score += 1
+
+    if target_year is not None and target_month is not None:
+        yy2 = str(target_year)[-2:]
+        month_pt = normalize_text(month_number_to_pt_name(target_month))
+        month_pt_ascii = normalize_text(month_number_to_pt_name_ascii(target_month))
+
+        normalized_url = normalize_text(url_low)
+
+        if str(target_year) in url_low or str(target_year) in text_low:
+            score += 3
+        if yy2 in url_low or yy2 in text_low:
+            score += 2
+        if month_pt in normalized_url or month_pt in text_low:
+            score += 4
+        if month_pt_ascii in normalized_url or month_pt_ascii in text_low:
+            score += 4
 
     return score
 
 
-def find_rmd_attachment_in_page(page_url: str) -> dict:
-    """
-    Retorna o melhor candidato de anexo .zip/.xlsx na página do RMD.
-    """
+def find_rmd_attachment_in_page(
+    page_url: str,
+    target_year: int | None = None,
+    target_month: int | None = None,
+) -> dict:
     html = fetch_html(page_url, timeout=60)
-    soup = BeautifulSoup(html, "html.parser")
-
-    candidates = []
-
-    for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
-        text = a.get_text(" ", strip=True)
-        full_url = urljoin(page_url, href)
-
-        href_low = full_url.lower()
-        if href_low.endswith(".zip") or href_low.endswith(".xlsx"):
-            score = score_attachment_candidate(full_url, text)
-            candidates.append(
-                {
-                    "score": score,
-                    "attachment_url": full_url,
-                    "anchor_text": text,
-                }
-            )
+    candidates = collect_link_candidates_from_html(page_url, html)
 
     if not candidates:
         raise FileNotFoundError(
-            f"Não encontrei anexo .zip/.xlsx na página do RMD: {page_url}"
+            f"Nenhum link candidato foi encontrado na página: {page_url}"
         )
 
-    candidates.sort(key=lambda x: x["score"], reverse=True)
-    best = candidates[0]
+    scored = []
+    for c in candidates:
+        score = score_attachment_candidate(
+            c,
+            target_year=target_year,
+            target_month=target_month,
+        )
+        scored.append({**c, "score": score})
+
+    scored = [c for c in scored if c["score"] > 0]
+
+    if not scored:
+        raise FileNotFoundError(
+            f"Encontrei links na página, mas nenhum parece ser anexo do RMD: {page_url}"
+        )
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    best = scored[0]
+
     return {
         "page_url": page_url,
         "attachment_url": best["attachment_url"],
         "anchor_text": best["anchor_text"],
+        "score": best["score"],
+        "source_attr": best["source_attr"],
     }
 
 
 def discover_latest_rmd_on_web(max_lookback_months: int = 18) -> dict:
     """
-    Procura o RMD mais recente na web, testando mês atual e retrocedendo.
+    Estratégia robusta:
+    1) tenta a página mensal específica;
+    2) se falhar, tenta a página-base do RMD;
+    3) recua mês a mês.
     """
     errors = []
 
     for year, month in iter_recent_year_months(max_lookback_months=max_lookback_months):
-        page_url = build_rmd_page_url(year, month)
+        monthly_url = build_rmd_page_url(year, month)
+        base_url = build_rmd_base_url()
 
-        try:
-            found = find_rmd_attachment_in_page(page_url)
-            return {
-                "source_type": "web",
-                "source_label": "Portal Tesouro Transparente",
-                "source_signature": f"web|{found['page_url']}|{found['attachment_url']}",
-                "page_url": found["page_url"],
-                "attachment_url": found["attachment_url"],
-                "anchor_text": found["anchor_text"],
-                "reference_year": year,
-                "reference_month": month,
-            }
-        except Exception as exc:
-            errors.append(f"{page_url} -> {exc}")
+        for candidate_page in [monthly_url, base_url]:
+            try:
+                found = find_rmd_attachment_in_page(
+                    candidate_page,
+                    target_year=year,
+                    target_month=month,
+                )
+                return {
+                    "source_type": "web",
+                    "source_label": "Portal Tesouro Transparente",
+                    "source_signature": (
+                        f"web|{found['page_url']}|{found['attachment_url']}"
+                    ),
+                    "page_url": found["page_url"],
+                    "attachment_url": found["attachment_url"],
+                    "anchor_text": found["anchor_text"],
+                    "reference_year": year,
+                    "reference_month": month,
+                    "score": found["score"],
+                    "source_attr": found["source_attr"],
+                }
+            except Exception as exc:
+                errors.append(f"{candidate_page} -> {exc}")
 
     raise FileNotFoundError(
-        "Não foi possível localizar um anexo de RMD na web dentro da janela de busca."
+        "Não foi possível localizar um anexo de RMD na web. "
+        + " | ".join(errors[-10:])
     )
 
 
 def download_file_to_temp(url: str, suffix: str | None = None) -> str:
-    headers = {"User-Agent": "Mozilla/5.0"}
-    resp = requests.get(url, headers=headers, timeout=120)
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept": "*/*",
+    }
+
+    resp = requests.get(url, headers=headers, timeout=120, allow_redirects=True)
     resp.raise_for_status()
 
     if suffix is None:
-        m = re.search(r"(\.zip|\.xlsx)(?:\?|$)", url.lower())
-        suffix = m.group(1) if m else ".bin"
+        content_type = resp.headers.get("Content-Type", "").lower()
+        final_url = resp.url.lower()
+
+        if ".zip" in final_url or "zip" in content_type:
+            suffix = ".zip"
+        elif (
+            ".xlsx" in final_url
+            or "spreadsheetml" in content_type
+            or "excel" in content_type
+        ):
+            suffix = ".xlsx"
+        elif ".pdf" in final_url or "pdf" in content_type:
+            suffix = ".pdf"
+        else:
+            suffix = ".bin"
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(resp.content)
@@ -433,30 +580,29 @@ def materialize_rmd_excel(source_info: dict) -> tuple[str, list[str], list[str]]
     Retorna:
       excel_path, temp_files, temp_dirs
     """
-    temp_files = []
-    temp_dirs = []
+    temp_files: list[str] = []
+    temp_dirs: list[str] = []
 
     if source_info["source_type"] == "local":
         return source_info["local_path"], temp_files, temp_dirs
 
     attachment_url = source_info["attachment_url"]
-    lower = attachment_url.lower()
-
-    downloaded_path = download_file_to_temp(
-        attachment_url,
-        suffix=".zip" if ".zip" in lower else ".xlsx",
-    )
+    downloaded_path = download_file_to_temp(attachment_url)
     temp_files.append(downloaded_path)
 
-    if downloaded_path.lower().endswith(".xlsx"):
+    lower = downloaded_path.lower()
+
+    if lower.endswith(".xlsx"):
         return downloaded_path, temp_files, temp_dirs
 
-    if downloaded_path.lower().endswith(".zip"):
+    if lower.endswith(".zip"):
         excel_path, extract_dir = extract_excel_from_zip(downloaded_path)
         temp_dirs.append(extract_dir)
         return excel_path, temp_files, temp_dirs
 
-    raise ValueError(f"Formato de arquivo inesperado: {downloaded_path}")
+    raise ValueError(
+        f"O arquivo baixado da web não é XLSX nem ZIP: {downloaded_path}"
+    )
 
 
 def discover_preferred_rmd_source(cfg: dict) -> dict:
@@ -485,8 +631,10 @@ def discover_preferred_rmd_source(cfg: dict) -> dict:
 # =========================================================
 def run_pipeline_auto(source_info: dict):
     cfg = get_config()
-    temp_files = []
-    temp_dirs = []
+    temp_files: list[str] = []
+    temp_dirs: list[str] = []
+    logger = None
+    st_handler = None
 
     try:
         excel_path, temp_files, temp_dirs = materialize_rmd_excel(source_info)
@@ -539,22 +687,24 @@ def run_pipeline_auto(source_info: dict):
             "export_tables": export_tables,
             "warnings": warnings,
             "summary": summary,
-            "logs": st_handler.messages,
+            "logs": st_handler.messages if st_handler else [],
             "excel_bytes": excel_bytes,
             "output_path": str(output_path),
         }
 
     except Exception as exc:
+        if logger is not None:
+            logger.exception("Falha na execução automática: %s", exc)
+
         return {
             "success": False,
             "source_info": source_info,
             "source_signature": source_info.get("source_signature"),
             "error": str(exc),
-            "logs": [],
+            "logs": st_handler.messages if st_handler else [],
         }
 
     finally:
-        # limpa temporários baixados da web
         for f in temp_files:
             try:
                 if f and Path(f).exists():
@@ -612,14 +762,14 @@ try:
             st.write(f"**Tipo:** {source_info.get('source_type', '-')}")
 
             if source_info.get("source_type") == "web":
-                st.markdown(
-                    f"**Página do RMD:** [{source_info['page_url']}]({source_info['page_url']})"
-                )
-                st.markdown(
-                    f"**Anexo localizado:** [{source_info['attachment_url']}]({source_info['attachment_url']})"
-                )
+                st.markdown(f"**Página do RMD:** {source_info.get('page_url', '-')}")
+                st.markdown(f"**Anexo localizado:** {source_info.get('attachment_url', '-')}")
                 if source_info.get("anchor_text"):
                     st.write(f"**Texto do link do anexo:** {source_info['anchor_text']}")
+                if source_info.get("score") is not None:
+                    st.write(f"**Score do candidato selecionado:** {source_info['score']}")
+                if source_info.get("source_attr"):
+                    st.write(f"**Atributo HTML usado:** {source_info['source_attr']}")
             else:
                 st.write(f"**Arquivo local:** {source_info.get('local_path', '-')}")
                 if source_info.get("fallback_reason"):
@@ -682,6 +832,11 @@ try:
         else:
             st.error("A execução automática falhou.")
             st.code(result.get("error", "Erro não detalhado."))
+
+            if result.get("logs"):
+                with st.expander("Logs da execução", expanded=True):
+                    for msg in result["logs"]:
+                        st.text(msg)
 
 except Exception as exc:
     st.error("Não foi possível inicializar o dashboard.")
