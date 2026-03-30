@@ -20,6 +20,7 @@ def get_config() -> dict:
         "Inadimplencia_pessoas_fisicas": 21112,
         "Inadimplencia_pessoas_juridicas": 21086,
         "Inadimplencia_recursos_livres": 21085,
+
         # setor externo mensal
         "Transacoes_correntes": 22701,
         "Transacoes_correntes_%_do_PIB": 23079,
@@ -27,6 +28,7 @@ def get_config() -> dict:
         "Conta_financeira": 22863,
         "IDP": 22885,
         "IDP_%_do_PIB": 23080,
+
         # fiscal
         "ResultadoPrimGovernoCentral": 5497,
         "ResultadoPrimConsolidado": 5793,
@@ -44,7 +46,9 @@ def get_config() -> dict:
         "DLSP_PIB": 4513,
     }
 
-    series_diarias = {"Cambio_diario": 1}
+    series_diarias = {
+        "Cambio_diario": 1
+    }
 
     series_anuais = {
         "PIB_RS": 1207,
@@ -63,25 +67,41 @@ def get_config() -> dict:
     }
 
     return {
+        # Coleta
         "START_SGS": "2019-01-01",
         "DAYS_DAILY_SGS": 7,
-        "ARQUIVO_RMD": "rmd/Anexo_RMD_Janeiro_26.xlsx",
+
+        # Agora aponta para a pasta-base; o app localiza automaticamente o RMD mais recente
+        "ARQUIVO_RMD": "rmd/",
         "ABA_RMD": "2.1",
         "MES_ALVO": "Dez",
         "ANO_INICIO_RMD": 2020,
+
+        # Saída
         "OUTPUT_NAME": "Recent Developments Data.xlsx",
+
+        # Auxiliares
         "PT_MESES": pt_meses,
         "series_mensais": series_mensais,
         "series_diarias": series_diarias,
         "series_anuais": series_anuais,
+
         "EXTERNO_MENSAL_KEYS": [
-            "Transacoes_correntes", "Transacoes_correntes_%_do_PIB",
-            "Conta_capital", "Conta_financeira", "IDP", "IDP_%_do_PIB",
+            "Transacoes_correntes",
+            "Transacoes_correntes_%_do_PIB",
+            "Conta_capital",
+            "Conta_financeira",
+            "IDP",
+            "IDP_%_do_PIB",
         ],
         "EXTERNO_12M_KEYS": [
-            "Transacoes_correntes", "Conta_capital", "Conta_financeira", "IDP",
+            "Transacoes_correntes",
+            "Conta_capital",
+            "Conta_financeira",
+            "IDP",
         ],
-        # logging
+
+        # Logging
         "LOG_LEVEL": "INFO",
         "LOG_TO_CONSOLE": True,
         "LOG_TO_FILE": True,
