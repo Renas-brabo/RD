@@ -1212,7 +1212,7 @@ def run_pipeline_auto(source_info: dict):
         export_tables = build_export_tables(processed, logger)
 
         # ---------------------------------------------------------
-        # NOVA ABA: rmd
+        # NOVA ABA: dados_dpf
         # ---------------------------------------------------------
         try:
             rmd_df = build_rmd_table_for_app(cfg["ARQUIVO_RMD"])
@@ -1226,7 +1226,7 @@ def run_pipeline_auto(source_info: dict):
                 }
             )
 
-        export_tables["rmd"] = rmd_df
+        export_tables["dados_dpf"] = rmd_df
 
         export_tables = standardize_column_names(export_tables, logger)
 
