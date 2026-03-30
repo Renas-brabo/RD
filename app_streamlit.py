@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import unicodedata
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -627,6 +627,552 @@ def discover_preferred_rmd_source(cfg: dict) -> dict:
 
 
 # =========================================================
+# RMD TABLE (integrado do script RD-Data-Public Debt Table.py)
+# =========================================================
+RMD_REFERENCE_SHEET = "2.1"
+RMD_MONTH_SCAN_ROWS = 60
+
+RMD_ROW_MAP = [
+    {
+        "key": "total_debt",
+        "display": "Federal Public Debt (R$ bn)",
+        "sheet": "2.1",
+        "row_label": ["DPF EM PODER DO PUBLICO", "DPF EM PODER DO PÚBLICO", "DPF", "Divida Publica Federal"],
+        "scale": 1.0,
+        "layout": "periods_in_columns",
+    },
+    {
+        "key": "domestic",
+        "display": "Domestic",
+        "sheet": "2.1",
+        "row_label": ["DPMFi"],
+        "scale": 1.0,
+        "layout": "periods_in_columns",
+    },
+    {
+        "key": "fixed_rate",
+        "display": "Fixed-rate",
+        "sheet": "2.5",
+        "row_label": ["Prefixado", "Fixed-rate", "Fixed rate"],
+        "scale": 1.0,
+        "layout": "periods_in_rows",
+    },
+    {
+        "key": "inflation_linked",
+        "display": "Inflation-linked",
+        "sheet": "2.5",
+        "row_label": [
+            "Indice de Precos",
+            "Indice Precos",
+            "Precos",
+            "Índice de Preços",
+            "Inflation-linked",
+            "Price-indexed",
+            "Price indexed",
+        ],
+        "scale": 1.0,
+        "layout": "periods_in_rows",
+    },
+    {
+        "key": "selic",
+        "display": "Selic rate",
+        "sheet": "2.5",
+        "row_label": ["Taxa Flutuante", "Flutuante", "Floating-rate", "Floating rate", "Selic"],
+        "scale": 1.0,
+        "layout": "periods_in_rows",
+    },
+    {
+        "key": "fx",
+        "display": "FX",
+        "sheet": "2.5",
+        "row_label": ["Cambio", "Câmbio", "'Câmbio", "FX"],
+        "scale": 1.0,
+        "layout": "periods_in_rows",
+    },
+    {
+        "key": "other",
+        "display": "Other",
+        "sheet": "2.5",
+        "row_label": ["Demais", "Other"],
+        "scale": 1.0,
+        "layout": "periods_in_rows",
+    },
+    {
+        "key": "external",
+        "display": "External (R$ bn)",
+        "sheet": "2.1",
+        "row_label": ["DPFe"],
+        "scale": 1.0,
+        "layout": "periods_in_columns",
+    },
+    {
+        "key": "avg_maturity",
+        "display": "Average Maturity (years)",
+        "sheet": "3.7",
+        "row_label": ["DPF", "Divida Publica Federal"],
+        "scale": 1.0,
+        "layout": "periods_in_columns",
+    },
+    {
+        "key": "maturing_12m_rs",
+        "display": "Maturing in 12 months (R$ bn)",
+        "sheet": "3.1",
+        "row_label": ["Ate 12 meses", "Até 12 meses", "Maturing in 12 months"],
+        "scale": 1.0,
+        "layout": "periods_in_rows",
+    },
+]
+
+RMD_PERCENT_AFTER = {
+    "total_debt": ("total_debt", "total_debt"),
+    "domestic": ("domestic", "total_debt"),
+    "fixed_rate": ("fixed_rate", "total_debt"),
+    "inflation_linked": ("inflation_linked", "total_debt"),
+    "selic": ("selic", "total_debt"),
+    "fx": ("fx", "total_debt"),
+    "other": ("other", "total_debt"),
+    "external": ("external", "total_debt"),
+    "maturing_12m_rs": ("maturing_12m_rs", "total_debt"),
+}
+
+RMD_MESES_PT = {
+    "jan": 1, "fev": 2, "mar": 3, "abr": 4, "mai": 5, "jun": 6,
+    "jul": 7, "ago": 8, "set": 9, "out": 10, "nov": 11, "dez": 12
+}
+
+RMD_MESES_EN_CAP = {
+    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+    7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
+}
+
+
+def rmd_normalize_text(s):
+    if s is None:
+        return ""
+    s = str(s).strip().lower()
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def rmd_normalize_date_text(s):
+    if s is None:
+        return ""
+    s = str(s).strip().lower()
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.replace("-", "/")
+    s = re.sub(r"[^a-z0-9/]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def rmd_month_token_to_datetime(x):
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return None
+
+    if isinstance(x, (pd.Timestamp, datetime)):
+        return datetime(x.year, x.month, 1)
+
+    if isinstance(x, (int, float)) and not pd.isna(x):
+        if 20000 <= float(x) <= 60000:
+            base = datetime(1899, 12, 30)
+            dt = base + timedelta(days=float(x))
+            return datetime(dt.year, dt.month, 1)
+
+    s = rmd_normalize_date_text(str(x))
+
+    m = re.match(r"^(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\s*/\s*(\d{2,4})$", s)
+    if m:
+        mes = RMD_MESES_PT[m.group(1)]
+        ano_txt = m.group(2)
+        ano = 2000 + int(ano_txt) if len(ano_txt) == 2 else int(ano_txt)
+        return datetime(ano, mes, 1)
+
+    m = re.match(r"^(\d{1,2})\s*/\s*(\d{2,4})$", s)
+    if m:
+        mes = int(m.group(1))
+        ano_txt = m.group(2)
+        if 1 <= mes <= 12:
+            ano = 2000 + int(ano_txt) if len(ano_txt) == 2 else int(ano_txt)
+            return datetime(ano, mes, 1)
+
+    for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%d/%m/%y", "%m/%d/%y", "%Y/%m/%d"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            return datetime(dt.year, dt.month, 1)
+        except Exception:
+            pass
+
+    return None
+
+
+def rmd_dt_to_en_token(dt):
+    return f"{RMD_MESES_EN_CAP[dt.month]}/{str(dt.year)[-2:]}"
+
+
+def rmd_month_variants(dt):
+    return {
+        rmd_normalize_date_text(rmd_dt_to_en_token(dt)),
+        rmd_normalize_date_text(f"{dt.month:02d}/{str(dt.year)[-2:]}"),
+        rmd_normalize_date_text(f"{dt.month:02d}/{dt.year}"),
+    }
+
+
+def rmd_infer_reference_month_from_filename(file_path):
+    nome = Path(file_path).stem
+    nome_norm = rmd_normalize_text(nome)
+
+    mapa_meses = {
+        "janeiro": 1, "fevereiro": 2, "marco": 3, "abril": 4, "maio": 5, "junho": 6,
+        "julho": 7, "agosto": 8, "setembro": 9, "outubro": 10, "novembro": 11, "dezembro": 12,
+        "jan": 1, "fev": 2, "mar": 3, "abr": 4, "mai": 5, "jun": 6,
+        "jul": 7, "ago": 8, "set": 9, "out": 10, "nov": 11, "dez": 12,
+    }
+
+    for mes_txt, mes_num in mapa_meses.items():
+        m = re.search(rf"{mes_txt}[ _-]?(\d{{2,4}})", nome_norm)
+        if m:
+            ano_txt = m.group(1)
+            ano = 2000 + int(ano_txt) if len(ano_txt) == 2 else int(ano_txt)
+            return datetime(ano, mes_num, 1)
+
+    return None
+
+
+def rmd_load_sheet(path, sheet_name):
+    return pd.read_excel(path, sheet_name=sheet_name, header=None, engine="openpyxl")
+
+
+def rmd_find_month_header_general(df, top_n_rows=RMD_MONTH_SCAN_ROWS, min_required=3):
+    best_row = None
+    best_map = {}
+    max_rows = min(top_n_rows, df.shape[0])
+
+    for r in range(max_rows):
+        current = {}
+        for c in range(df.shape[1]):
+            dt = rmd_month_token_to_datetime(df.iat[r, c])
+            if dt is not None:
+                current[dt] = c
+        if len(current) > len(best_map) and len(current) >= min_required:
+            best_map = current
+            best_row = r
+
+    if best_row is None or not best_map:
+        raise ValueError("Não encontrei a linha de meses na aba.")
+
+    return best_row, dict(sorted(best_map.items(), key=lambda x: x[0]))
+
+
+def rmd_find_reference_months(df):
+    return rmd_find_month_header_general(df, top_n_rows=RMD_MONTH_SCAN_ROWS, min_required=6)
+
+
+def rmd_choose_periods(month_cols, file_path=None):
+    meses_disponiveis = sorted(month_cols.keys())
+    main = None
+
+    if file_path is not None:
+        main = rmd_infer_reference_month_from_filename(file_path)
+
+    if main is None:
+        main = meses_disponiveis[-1]
+
+    if main not in meses_disponiveis:
+        raise ValueError(
+            f"O mês de referência {rmd_dt_to_en_token(main)} não foi encontrado nas colunas da aba '{RMD_REFERENCE_SHEET}'."
+        )
+
+    prev = datetime(main.year, main.month, 1) - pd.DateOffset(months=1)
+    prev = datetime(prev.year, prev.month, 1)
+    yoy = datetime(main.year - 1, main.month, 1)
+
+    if prev not in meses_disponiveis:
+        raise ValueError(
+            f"Não encontrei o mês anterior {rmd_dt_to_en_token(prev)} na aba '{RMD_REFERENCE_SHEET}'."
+        )
+    if yoy not in meses_disponiveis:
+        raise ValueError(
+            f"Não encontrei o mesmo mês do ano anterior {rmd_dt_to_en_token(yoy)} na aba '{RMD_REFERENCE_SHEET}'."
+        )
+
+    return main, prev, yoy
+
+
+def rmd_find_period_columns_in_sheet(df, periods, sheet_name):
+    header_row, month_cols = rmd_find_month_header_general(df, top_n_rows=RMD_MONTH_SCAN_ROWS, min_required=3)
+    missing = [rmd_dt_to_en_token(p) for p in periods if p not in month_cols]
+
+    if missing:
+        found = {}
+        for r in range(min(RMD_MONTH_SCAN_ROWS, df.shape[0])):
+            for c in range(df.shape[1]):
+                cell_norm = rmd_normalize_date_text(df.iat[r, c])
+                if not cell_norm:
+                    continue
+                for dt in periods:
+                    if dt in found:
+                        continue
+                    if cell_norm in rmd_month_variants(dt):
+                        found[dt] = c
+        for p in periods:
+            if p not in found and p in month_cols:
+                found[p] = month_cols[p]
+
+        missing = [rmd_dt_to_en_token(p) for p in periods if p not in found]
+        if missing:
+            raise ValueError(
+                f"Não encontrei as colunas dos períodos {missing} na aba '{sheet_name}'."
+            )
+        return header_row, found
+
+    return header_row, {p: month_cols[p] for p in periods}
+
+
+def rmd_find_period_rows_in_sheet(df, periods, sheet_name):
+    found = {}
+    for r in range(df.shape[0]):
+        for c in range(min(4, df.shape[1])):
+            dt = rmd_month_token_to_datetime(df.iat[r, c])
+            if dt is not None:
+                for target in periods:
+                    if target not in found and dt == target:
+                        found[target] = r
+
+    missing = [rmd_dt_to_en_token(p) for p in periods if p not in found]
+    if missing:
+        raise ValueError(
+            f"Não encontrei as linhas dos períodos {missing} na aba '{sheet_name}'."
+        )
+
+    return found
+
+
+def rmd_row_text(df, r, ncols=6):
+    vals = []
+    for c in range(min(ncols, df.shape[1])):
+        v = df.iat[r, c]
+        if pd.notna(v):
+            vals.append(str(v))
+    return rmd_normalize_text(" ".join(vals))
+
+
+def rmd_find_row_by_label(df, target_label, min_row=0):
+    if isinstance(target_label, (list, tuple, set)):
+        targets = [rmd_normalize_text(x) for x in target_label]
+    else:
+        targets = [rmd_normalize_text(target_label)]
+
+    for r in range(min_row, df.shape[0]):
+        for c in range(min(4, df.shape[1])):
+            cell = rmd_normalize_text(df.iat[r, c])
+            if not cell:
+                continue
+            for t in targets:
+                if cell == t:
+                    return r
+
+    for r in range(min_row, df.shape[0]):
+        txt = rmd_row_text(df, r, ncols=6)
+        if not txt or txt.startswith("anexo"):
+            continue
+        for t in targets:
+            if txt == t:
+                return r
+
+    for r in range(min_row, df.shape[0]):
+        txt = rmd_row_text(df, r, ncols=6)
+        if not txt or txt.startswith("anexo"):
+            continue
+        for t in targets:
+            if t in txt:
+                return r
+
+    raise ValueError(f"Não encontrei a linha '{target_label}'.")
+
+
+def rmd_find_col_by_label(df, target_label, max_scan_rows=80):
+    if isinstance(target_label, (list, tuple, set)):
+        targets = [rmd_normalize_text(x) for x in target_label]
+    else:
+        targets = [rmd_normalize_text(target_label)]
+
+    best_col = None
+    best_score = 0
+
+    for c in range(df.shape[1]):
+        textos = []
+        for r in range(min(max_scan_rows, df.shape[0])):
+            v = df.iat[r, c]
+            if pd.notna(v):
+                textos.append(str(v))
+        txt = rmd_normalize_text(" ".join(textos))
+        if not txt:
+            continue
+
+        for t in targets:
+            if txt == t or t in txt:
+                return c
+
+        txt_tokens = set(txt.split())
+        for t in targets:
+            t_tokens = set(t.split())
+            score = len(txt_tokens.intersection(t_tokens))
+            if score > best_score:
+                best_score = score
+                best_col = c
+
+    if best_col is not None and best_score >= 1:
+        return best_col
+
+    raise ValueError(f"Não encontrei a coluna '{target_label}'.")
+
+
+def rmd_extract_value(df, row_idx, col_idx, scale=1.0):
+    v = df.iat[row_idx, col_idx]
+    if pd.isna(v):
+        return None
+    try:
+        return float(v) / scale
+    except Exception:
+        return None
+
+
+def build_rmd_raw_table(path):
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Arquivo não encontrado: {path.resolve()}")
+
+    df_ref = rmd_load_sheet(path, RMD_REFERENCE_SHEET)
+    _, ref_month_cols = rmd_find_reference_months(df_ref)
+    p1, p2, p3 = rmd_choose_periods(ref_month_cols, file_path=path)
+    periods = [p1, p2, p3]
+    period_labels = [rmd_dt_to_en_token(p) for p in periods]
+
+    sheets_cache = {RMD_REFERENCE_SHEET: df_ref}
+    values_by_key = {}
+
+    for item in RMD_ROW_MAP:
+        sheet = item["sheet"]
+        if sheet not in sheets_cache:
+            sheets_cache[sheet] = rmd_load_sheet(path, sheet)
+        df = sheets_cache[sheet]
+
+        layout = item.get("layout", "periods_in_columns")
+
+        if layout == "periods_in_columns":
+            header_row, period_cols = rmd_find_period_columns_in_sheet(df, periods, sheet)
+            row_idx = rmd_find_row_by_label(df, item["row_label"], min_row=header_row + 1)
+            vals = []
+            for p in periods:
+                col_idx = period_cols[p]
+                vals.append(rmd_extract_value(df, row_idx, col_idx, scale=item.get("scale", 1.0)))
+            values_by_key[item["key"]] = vals
+
+        elif layout == "periods_in_rows":
+            period_rows = rmd_find_period_rows_in_sheet(df, periods, sheet)
+            col_idx = rmd_find_col_by_label(df, item["row_label"])
+            vals = []
+            for p in periods:
+                row_idx = period_rows[p]
+                vals.append(rmd_extract_value(df, row_idx, col_idx, scale=item.get("scale", 1.0)))
+            values_by_key[item["key"]] = vals
+
+        else:
+            raise ValueError(f"Layout inválido em {item['key']}: {layout}")
+
+    rows = []
+    for item in RMD_ROW_MAP:
+        vals = values_by_key[item["key"]]
+        rows.append([item["key"], item["display"], *vals])
+
+        if item["key"] in RMD_PERCENT_AFTER:
+            ref_key, base_key = RMD_PERCENT_AFTER[item["key"]]
+            ref_vals = values_by_key[ref_key]
+            base_vals = values_by_key[base_key]
+
+            pct_vals = []
+            for a, b in zip(ref_vals, base_vals):
+                if b in (None, 0) or pd.isna(b) or a is None or pd.isna(a):
+                    pct_vals.append(None)
+                else:
+                    pct_vals.append(100 * a / b)
+
+            rows.append([f"{item['key']}_pct", "%", *pct_vals])
+
+    raw = pd.DataFrame(rows, columns=["key", "Item", *period_labels])
+    return raw, period_labels
+
+
+def build_rmd_presentation_table(raw, period_labels):
+    block = {}
+    i = 0
+
+    while i < len(raw):
+        key = raw.iloc[i]["key"]
+        item = raw.iloc[i]["Item"]
+        vals = [raw.iloc[i][p] for p in period_labels]
+        pct_vals = None
+
+        if i + 1 < len(raw):
+            next_key = str(raw.iloc[i + 1]["key"])
+            next_item = raw.iloc[i + 1]["Item"]
+            if next_item == "%" and next_key.startswith(str(key)):
+                pct_vals = [raw.iloc[i + 1][p] for p in period_labels]
+                i += 1
+
+        block[key] = {"label": item, "values": vals, "pct": pct_vals}
+        i += 1
+
+    def make_value_pct_row(label, value_key, use_pct=True):
+        vals = block[value_key]["values"]
+        pct = block[value_key]["pct"] if use_pct else [None, None, None]
+        row = [label]
+        for v, p in zip(vals, pct):
+            row.extend([v, p])
+        return row
+
+    def make_value_only_row(label, values):
+        row = [label]
+        for v in values:
+            row.extend([v, None])
+        return row
+
+    presentation_rows = []
+    presentation_rows.append(make_value_pct_row("Federal Public Debt (R$ bn)", "total_debt", True))
+    presentation_rows.append(make_value_pct_row("Domestic", "domestic", True))
+    presentation_rows.append(make_value_pct_row("Fixed-rate", "fixed_rate", True))
+    presentation_rows.append(make_value_pct_row("Inflation-linked", "inflation_linked", True))
+    presentation_rows.append(make_value_pct_row("Selic rate", "selic", True))
+    presentation_rows.append(make_value_pct_row("FX", "fx", True))
+    presentation_rows.append(make_value_pct_row("Other", "other", True))
+    presentation_rows.append(make_value_pct_row("External (R$ bn)", "external", True))
+    presentation_rows.append(["Maturity Profile", None, None, None, None, None, None])
+    presentation_rows.append(make_value_only_row(" Average Maturity (years)", block["avg_maturity"]["values"]))
+    presentation_rows.append(make_value_only_row(" Maturing in 12 months (R$ bn)", block["maturing_12m_rs"]["values"]))
+    presentation_rows.append(make_value_only_row(" Maturing in 12 months (%)", block["maturing_12m_rs"]["pct"]))
+
+    df = pd.DataFrame(
+        presentation_rows,
+        columns=[
+            "Item",
+            f"{period_labels[0]}_value", f"{period_labels[0]}_pct",
+            f"{period_labels[1]}_value", f"{period_labels[1]}_pct",
+            f"{period_labels[2]}_value", f"{period_labels[2]}_pct",
+        ],
+    )
+    return df
+
+
+def build_rmd_table_for_app(rmd_excel_path: str) -> pd.DataFrame:
+    raw, period_labels = build_rmd_raw_table(rmd_excel_path)
+    return build_rmd_presentation_table(raw, period_labels)
+
+
+# =========================================================
 # Execução do pipeline
 # =========================================================
 def run_pipeline_auto(source_info: dict):
@@ -664,6 +1210,24 @@ def run_pipeline_auto(source_info: dict):
         processed, warnings = process_data(raw, cfg, logger)
 
         export_tables = build_export_tables(processed, logger)
+
+        # ---------------------------------------------------------
+        # NOVA ABA: rmd
+        # ---------------------------------------------------------
+        try:
+            rmd_df = build_rmd_table_for_app(cfg["ARQUIVO_RMD"])
+            logger.info("Tabela RMD integrada com sucesso à saída final.")
+        except Exception as exc:
+            logger.warning("Falha ao montar a aba 'rmd': %s", exc)
+            rmd_df = pd.DataFrame(
+                {
+                    "status": ["erro"],
+                    "detalhe": [str(exc)],
+                }
+            )
+
+        export_tables["rmd"] = rmd_df
+
         export_tables = standardize_column_names(export_tables, logger)
 
         output_path = export_to_excel(export_tables, cfg["OUTPUT_NAME"], logger)
@@ -731,7 +1295,7 @@ st.set_page_config(
 
 st.title("📊 RD Data Dashboard")
 st.caption(
-    "Execução automática do pipeline com busca web do RMD e fallback local."
+    "Execução automática do pipeline com busca web do RMD, fallback local e aba adicional 'rmd'."
 )
 
 default_cfg = get_config()
