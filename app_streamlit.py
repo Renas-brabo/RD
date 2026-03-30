@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
+import tempfile
 import unicodedata
-from datetime import datetime
+import zipfile
+from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import urljoin
 
 import pandas as pd
+import requests
 import streamlit as st
+from bs4 import BeautifulSoup
 
 from rd_data_multiarquivo.config import get_config
 from rd_data_multiarquivo.logging_utils import setup_logger
@@ -23,9 +29,9 @@ from rd_data_multiarquivo.exporters import (
 from rd_data_multiarquivo.naming import standardize_column_names
 
 
-# =========================
+# =========================================================
 # Logging para interface
-# =========================
+# =========================================================
 class StreamlitLogHandler(logging.Handler):
     def __init__(self):
         super().__init__()
@@ -36,9 +42,9 @@ class StreamlitLogHandler(logging.Handler):
         self.messages.append(msg)
 
 
-# =========================
-# Utilidades de texto / nome
-# =========================
+# =========================================================
+# Utilidades gerais
+# =========================================================
 def normalize_text(text: str) -> str:
     text = str(text).strip().lower()
     text = unicodedata.normalize("NFKD", text)
@@ -79,9 +85,55 @@ def month_name_to_number(token: str) -> int | None:
     return month_map.get(token)
 
 
+def current_file_signature(path: Path) -> str:
+    stat = path.stat()
+    return f"{path.resolve()}|{int(stat.st_mtime)}|{stat.st_size}"
+
+
+def prepare_preview_df(df: pd.DataFrame, max_rows: int = 50) -> pd.DataFrame:
+    """
+    Mostra automaticamente as linhas mais recentes.
+    """
+    df_view = df.copy()
+
+    date_col = None
+    year_col = None
+
+    for candidate in ["data", "Data"]:
+        if candidate in df_view.columns:
+            date_col = candidate
+            break
+
+    for candidate in ["ano", "Ano"]:
+        if candidate in df_view.columns:
+            year_col = candidate
+            break
+
+    if date_col:
+        df_view[date_col] = pd.to_datetime(df_view[date_col], errors="coerce")
+        df_view = (
+            df_view.sort_values(date_col, ascending=False)
+            .head(max_rows)
+            .reset_index(drop=True)
+        )
+    elif year_col:
+        df_view[year_col] = pd.to_numeric(df_view[year_col], errors="coerce")
+        df_view = (
+            df_view.sort_values(year_col, ascending=False)
+            .head(max_rows)
+            .reset_index(drop=True)
+        )
+    else:
+        df_view = df_view.tail(max_rows).reset_index(drop=True)
+
+    return df_view
+
+
+# =========================================================
+# Descoberta LOCAL do RMD
+# =========================================================
 def is_excel_temp_file(path: Path) -> bool:
-    name = path.name
-    return name.startswith("~$")
+    return path.name.startswith("~$")
 
 
 def is_hidden_file(path: Path) -> bool:
@@ -89,9 +141,6 @@ def is_hidden_file(path: Path) -> bool:
 
 
 def looks_like_rmd_file(path: Path) -> bool:
-    """
-    Critério amplo, mas seguro, para reconhecer candidatos a RMD.
-    """
     if not path.is_file():
         return False
     if path.suffix.lower() != ".xlsx":
@@ -102,8 +151,6 @@ def looks_like_rmd_file(path: Path) -> bool:
         return False
 
     name = normalize_text(path.stem)
-
-    # Aceita variações comuns
     keywords = ["rmd", "anexo_rmd", "anexo-rmd", "anexo rmd", "divida", "dpf"]
     return any(k in name for k in keywords)
 
@@ -111,16 +158,13 @@ def looks_like_rmd_file(path: Path) -> bool:
 def parse_rmd_month_year_from_name(file_path: Path) -> tuple[int, int] | None:
     """
     Tenta extrair (ano, mês) do nome do arquivo.
-
-    Exemplos aceitos:
+    Exemplos:
       - Anexo_RMD_Janeiro_26.xlsx
       - Anexo-RMD-Fev-2026.xlsx
       - RMD mar 25.xlsx
-      - rmd_abril_2024_final.xlsx
       - anexo.rmd.dez.2023.xlsx
     """
     stem = normalize_text(file_path.stem)
-
     tokens = [t for t in re.split(r"[_\-\s\.]+", stem) if t]
 
     month_num = None
@@ -172,28 +216,7 @@ def parse_rmd_month_year_from_name(file_path: Path) -> tuple[int, int] | None:
     return None
 
 
-def discover_rmd_candidates(rmd_dir: Path) -> list[Path]:
-    """
-    Procura recursivamente candidatos a RMD dentro da pasta.
-    """
-    if not rmd_dir.exists():
-        raise FileNotFoundError(f"Pasta de RMD não encontrada: {rmd_dir}")
-
-    files = [p for p in rmd_dir.rglob("*.xlsx") if looks_like_rmd_file(p)]
-    return sorted(files)
-
-
-def build_rmd_rank(path: Path) -> tuple:
-    """
-    Monta um rank robusto para escolher o arquivo "mais recente".
-
-    Prioridade:
-    1) arquivo com mês/ano inferíveis do nome;
-    2) maior ano;
-    3) maior mês;
-    4) maior data de modificação;
-    5) nome (desempate estável).
-    """
+def build_local_rmd_rank(path: Path) -> tuple:
     parsed = parse_rmd_month_year_from_name(path)
     mtime = path.stat().st_mtime
     normalized_name = normalize_text(path.name)
@@ -205,37 +228,7 @@ def build_rmd_rank(path: Path) -> tuple:
     return (1, 0, 0, mtime, normalized_name)
 
 
-def find_latest_rmd_file(rmd_dir: str | Path = "rmd") -> Path:
-    """
-    Detecta o RMD mais recente de forma blindada.
-    """
-    rmd_dir = Path(rmd_dir)
-
-    candidates = discover_rmd_candidates(rmd_dir)
-    if not candidates:
-        raise FileNotFoundError(
-            f"Nenhum arquivo RMD válido (.xlsx) foi encontrado em: {rmd_dir}"
-        )
-
-    ranked = [(build_rmd_rank(p), p) for p in candidates]
-    ranked.sort(key=lambda x: x[0], reverse=True)
-    return ranked[0][1]
-
-
-def current_rmd_signature(path: Path) -> str:
-    """
-    Assinatura do arquivo para detectar mudança automática e rerodar.
-    """
-    stat = path.stat()
-    return f"{path.resolve()}|{int(stat.st_mtime)}|{stat.st_size}"
-
-
 def get_rmd_search_dir_from_config(cfg: dict) -> Path:
-    """
-    Deriva a pasta-base de busca a partir do ARQUIVO_RMD configurado.
-    Se o config vier como 'rmd/arquivo.xlsx', usa 'rmd/'.
-    Se vier vazio ou inválido, usa 'rmd/'.
-    """
     configured = str(cfg.get("ARQUIVO_RMD", "")).strip()
 
     if not configured:
@@ -243,83 +236,279 @@ def get_rmd_search_dir_from_config(cfg: dict) -> Path:
 
     p = Path(configured)
 
-    # Se apontar para arquivo, buscamos na pasta pai
     if p.suffix:
         parent = p.parent
         return parent if str(parent) not in ("", ".") else Path("rmd")
 
-    # Se apontar para diretório
     return p
 
 
-# =========================
-# Preview das abas
-# =========================
-def prepare_preview_df(df: pd.DataFrame, max_rows: int = 50) -> pd.DataFrame:
-    """
-    Mostra automaticamente as linhas mais recentes.
-    """
-    df_view = df.copy()
+def find_latest_local_rmd_file(rmd_dir: str | Path = "rmd") -> Path:
+    rmd_dir = Path(rmd_dir)
 
-    date_col = None
-    year_col = None
+    if not rmd_dir.exists():
+        raise FileNotFoundError(f"Pasta de RMD não encontrada: {rmd_dir}")
 
-    for candidate in ["data", "Data"]:
-        if candidate in df_view.columns:
-            date_col = candidate
-            break
-
-    for candidate in ["ano", "Ano"]:
-        if candidate in df_view.columns:
-            year_col = candidate
-            break
-
-    if date_col:
-        df_view[date_col] = pd.to_datetime(df_view[date_col], errors="coerce")
-        df_view = (
-            df_view.sort_values(date_col, ascending=False)
-            .head(max_rows)
-            .reset_index(drop=True)
+    candidates = [p for p in rmd_dir.rglob("*.xlsx") if looks_like_rmd_file(p)]
+    if not candidates:
+        raise FileNotFoundError(
+            f"Nenhum arquivo RMD válido (.xlsx) foi encontrado em: {rmd_dir}"
         )
-    elif year_col:
-        df_view[year_col] = pd.to_numeric(df_view[year_col], errors="coerce")
-        df_view = (
-            df_view.sort_values(year_col, ascending=False)
-            .head(max_rows)
-            .reset_index(drop=True)
-        )
-    else:
-        df_view = df_view.tail(max_rows).reset_index(drop=True)
 
-    return df_view
+    ranked = [(build_local_rmd_rank(p), p) for p in candidates]
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    return ranked[0][1]
 
 
-# =========================
-# Execução automática
-# =========================
-def run_pipeline_auto(latest_rmd: Path):
-    """
-    Executa o pipeline automaticamente usando o RMD detectado.
-    """
-    cfg = get_config()
-    cfg["ARQUIVO_RMD"] = str(latest_rmd)
-    cfg["LOG_TO_CONSOLE"] = False
-    cfg["LOG_TO_FILE"] = True
-
-    logger, log_artifacts = setup_logger(cfg)
-
-    st_handler = StreamlitLogHandler()
-    st_handler.setLevel(logging.INFO)
-    st_handler.setFormatter(
-        logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+# =========================================================
+# Descoberta WEB do RMD
+# =========================================================
+def build_rmd_page_url(year: int, month: int) -> str:
+    return (
+        "https://www.tesourotransparente.gov.br/publicacoes/"
+        f"relatorio-mensal-da-divida-rmd/{year}/{month}"
     )
-    logger.addHandler(st_handler)
 
-    started_at = datetime.now().timestamp()
+
+def iter_recent_year_months(max_lookback_months: int = 18):
+    """
+    Gera pares (ano, mês) do mês atual para trás.
+    """
+    today = date.today()
+    y, m = today.year, today.month
+
+    for _ in range(max_lookback_months):
+        yield y, m
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+
+
+def fetch_html(url: str, timeout: int = 60) -> str:
+    headers = {"User-Agent": "Mozilla/5.0"}
+    resp = requests.get(url, headers=headers, timeout=timeout)
+    resp.raise_for_status()
+    return resp.text
+
+
+def score_attachment_candidate(full_url: str, text: str) -> int:
+    href_low = full_url.lower()
+    text_low = normalize_text(text)
+
+    score = 0
+
+    if href_low.endswith(".xlsx"):
+        score += 5
+    elif href_low.endswith(".zip"):
+        score += 4
+
+    if "anexo" in href_low or "anexo" in text_low:
+        score += 3
+    if "rmd" in href_low or "rmd" in text_low:
+        score += 3
+    if "tabela" in href_low or "tabela" in text_low:
+        score += 2
+    if "anex" in href_low or "anex" in text_low:
+        score += 1
+
+    return score
+
+
+def find_rmd_attachment_in_page(page_url: str) -> dict:
+    """
+    Retorna o melhor candidato de anexo .zip/.xlsx na página do RMD.
+    """
+    html = fetch_html(page_url, timeout=60)
+    soup = BeautifulSoup(html, "html.parser")
+
+    candidates = []
+
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        text = a.get_text(" ", strip=True)
+        full_url = urljoin(page_url, href)
+
+        href_low = full_url.lower()
+        if href_low.endswith(".zip") or href_low.endswith(".xlsx"):
+            score = score_attachment_candidate(full_url, text)
+            candidates.append(
+                {
+                    "score": score,
+                    "attachment_url": full_url,
+                    "anchor_text": text,
+                }
+            )
+
+    if not candidates:
+        raise FileNotFoundError(
+            f"Não encontrei anexo .zip/.xlsx na página do RMD: {page_url}"
+        )
+
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    best = candidates[0]
+    return {
+        "page_url": page_url,
+        "attachment_url": best["attachment_url"],
+        "anchor_text": best["anchor_text"],
+    }
+
+
+def discover_latest_rmd_on_web(max_lookback_months: int = 18) -> dict:
+    """
+    Procura o RMD mais recente na web, testando mês atual e retrocedendo.
+    """
+    errors = []
+
+    for year, month in iter_recent_year_months(max_lookback_months=max_lookback_months):
+        page_url = build_rmd_page_url(year, month)
+
+        try:
+            found = find_rmd_attachment_in_page(page_url)
+            return {
+                "source_type": "web",
+                "source_label": "Portal Tesouro Transparente",
+                "source_signature": f"web|{found['page_url']}|{found['attachment_url']}",
+                "page_url": found["page_url"],
+                "attachment_url": found["attachment_url"],
+                "anchor_text": found["anchor_text"],
+                "reference_year": year,
+                "reference_month": month,
+            }
+        except Exception as exc:
+            errors.append(f"{page_url} -> {exc}")
+
+    raise FileNotFoundError(
+        "Não foi possível localizar um anexo de RMD na web dentro da janela de busca."
+    )
+
+
+def download_file_to_temp(url: str, suffix: str | None = None) -> str:
+    headers = {"User-Agent": "Mozilla/5.0"}
+    resp = requests.get(url, headers=headers, timeout=120)
+    resp.raise_for_status()
+
+    if suffix is None:
+        m = re.search(r"(\.zip|\.xlsx)(?:\?|$)", url.lower())
+        suffix = m.group(1) if m else ".bin"
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(resp.content)
+        return tmp.name
+
+
+def extract_excel_from_zip(zip_path: str) -> tuple[str, str]:
+    """
+    Extrai o primeiro .xlsx relevante do ZIP.
+    Retorna:
+      (excel_path, temp_extract_dir)
+    """
+    extract_dir = tempfile.mkdtemp(prefix="rmd_zip_")
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(extract_dir)
+
+    excel_files = [p for p in Path(extract_dir).rglob("*.xlsx") if p.is_file()]
+    if not excel_files:
+        raise FileNotFoundError(
+            f"Nenhum arquivo .xlsx foi encontrado dentro do ZIP: {zip_path}"
+        )
+
+    def rank_excel_inside_zip(path: Path):
+        name = normalize_text(path.name)
+        return (
+            "rmd" in name,
+            "anexo" in name,
+            "tabela" in name,
+            name,
+        )
+
+    excel_files.sort(key=rank_excel_inside_zip, reverse=True)
+    return str(excel_files[0]), extract_dir
+
+
+def materialize_rmd_excel(source_info: dict) -> tuple[str, list[str], list[str]]:
+    """
+    Converte a origem escolhida em um caminho local de Excel pronto para o pipeline.
+    Retorna:
+      excel_path, temp_files, temp_dirs
+    """
+    temp_files = []
+    temp_dirs = []
+
+    if source_info["source_type"] == "local":
+        return source_info["local_path"], temp_files, temp_dirs
+
+    attachment_url = source_info["attachment_url"]
+    lower = attachment_url.lower()
+
+    downloaded_path = download_file_to_temp(
+        attachment_url,
+        suffix=".zip" if ".zip" in lower else ".xlsx",
+    )
+    temp_files.append(downloaded_path)
+
+    if downloaded_path.lower().endswith(".xlsx"):
+        return downloaded_path, temp_files, temp_dirs
+
+    if downloaded_path.lower().endswith(".zip"):
+        excel_path, extract_dir = extract_excel_from_zip(downloaded_path)
+        temp_dirs.append(extract_dir)
+        return excel_path, temp_files, temp_dirs
+
+    raise ValueError(f"Formato de arquivo inesperado: {downloaded_path}")
+
+
+def discover_preferred_rmd_source(cfg: dict) -> dict:
+    """
+    Estratégia:
+    1) tenta web;
+    2) se falhar, usa o RMD local mais recente da pasta configurada.
+    """
+    local_dir = get_rmd_search_dir_from_config(cfg)
 
     try:
+        return discover_latest_rmd_on_web(max_lookback_months=18)
+    except Exception as web_exc:
+        latest_local = find_latest_local_rmd_file(local_dir)
+        return {
+            "source_type": "local",
+            "source_label": "Repositório local",
+            "source_signature": f"local|{current_file_signature(latest_local)}",
+            "local_path": str(latest_local),
+            "fallback_reason": str(web_exc),
+        }
+
+
+# =========================================================
+# Execução do pipeline
+# =========================================================
+def run_pipeline_auto(source_info: dict):
+    cfg = get_config()
+    temp_files = []
+    temp_dirs = []
+
+    try:
+        excel_path, temp_files, temp_dirs = materialize_rmd_excel(source_info)
+
+        cfg["ARQUIVO_RMD"] = excel_path
+        cfg["LOG_TO_CONSOLE"] = False
+        cfg["LOG_TO_FILE"] = True
+
+        logger, log_artifacts = setup_logger(cfg)
+
+        st_handler = StreamlitLogHandler()
+        st_handler.setLevel(logging.INFO)
+        st_handler.setFormatter(
+            logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+        )
+        logger.addHandler(st_handler)
+
+        started_at = datetime.now().timestamp()
+
         logger.info("Iniciando execução automática pelo Streamlit.")
-        logger.info("Arquivo RMD detectado automaticamente: %s", cfg["ARQUIVO_RMD"])
+        logger.info("Fonte RMD selecionada: %s", source_info["source_label"])
+        logger.info("ARQUIVO_RMD em uso: %s", cfg["ARQUIVO_RMD"])
 
         validate_config(cfg)
 
@@ -345,8 +534,8 @@ def run_pipeline_auto(latest_rmd: Path):
 
         return {
             "success": True,
-            "detected_rmd": str(latest_rmd),
-            "detected_rmd_signature": current_rmd_signature(latest_rmd),
+            "source_info": source_info,
+            "source_signature": source_info["source_signature"],
             "export_tables": export_tables,
             "warnings": warnings,
             "summary": summary,
@@ -356,19 +545,34 @@ def run_pipeline_auto(latest_rmd: Path):
         }
 
     except Exception as exc:
-        logger.exception("Falha na execução automática: %s", exc)
         return {
             "success": False,
-            "detected_rmd": str(latest_rmd),
-            "detected_rmd_signature": current_rmd_signature(latest_rmd),
+            "source_info": source_info,
+            "source_signature": source_info.get("source_signature"),
             "error": str(exc),
-            "logs": st_handler.messages,
+            "logs": [],
         }
 
+    finally:
+        # limpa temporários baixados da web
+        for f in temp_files:
+            try:
+                if f and Path(f).exists():
+                    Path(f).unlink()
+            except Exception:
+                pass
 
-# =========================
+        for d in temp_dirs:
+            try:
+                if d and Path(d).exists():
+                    shutil.rmtree(d, ignore_errors=True)
+            except Exception:
+                pass
+
+
+# =========================================================
 # Interface
-# =========================
+# =========================================================
 st.set_page_config(
     page_title="RD Data Dashboard",
     page_icon="📊",
@@ -377,31 +581,50 @@ st.set_page_config(
 
 st.title("📊 RD Data Dashboard")
 st.caption(
-    "Execução automática do pipeline com detecção blindada do RMD mais recente."
+    "Execução automática do pipeline com busca web do RMD e fallback local."
 )
 
 default_cfg = get_config()
-rmd_search_dir = get_rmd_search_dir_from_config(default_cfg)
 
 try:
-    latest_rmd = find_latest_rmd_file(rmd_search_dir)
-    latest_signature = current_rmd_signature(latest_rmd)
+    latest_source = discover_preferred_rmd_source(default_cfg)
+    latest_signature = latest_source["source_signature"]
 
     should_run = (
         "rd_result" not in st.session_state
-        or st.session_state.get("rd_result", {}).get("detected_rmd_signature") != latest_signature
+        or st.session_state.get("rd_result", {}).get("source_signature") != latest_signature
     )
 
     if should_run:
-        with st.spinner("Localizando o RMD mais recente e executando o pipeline..."):
-            st.session_state["rd_result"] = run_pipeline_auto(latest_rmd)
+        with st.spinner("Localizando a fonte mais recente do RMD e executando o pipeline..."):
+            st.session_state["rd_result"] = run_pipeline_auto(latest_source)
 
     result = st.session_state.get("rd_result")
 
     if result:
+        source_info = result.get("source_info", {})
+
         if result["success"]:
             st.success("Pipeline executado com sucesso.")
-            st.info(f"Arquivo RMD detectado automaticamente: {result['detected_rmd']}")
+
+            st.subheader("Fonte do RMD utilizada")
+            st.write(f"**Origem:** {source_info.get('source_label', '-')}")
+            st.write(f"**Tipo:** {source_info.get('source_type', '-')}")
+
+            if source_info.get("source_type") == "web":
+                st.markdown(
+                    f"**Página do RMD:** [{source_info['page_url']}]({source_info['page_url']})"
+                )
+                st.markdown(
+                    f"**Anexo localizado:** [{source_info['attachment_url']}]({source_info['attachment_url']})"
+                )
+                if source_info.get("anchor_text"):
+                    st.write(f"**Texto do link do anexo:** {source_info['anchor_text']}")
+            else:
+                st.write(f"**Arquivo local:** {source_info.get('local_path', '-')}")
+                if source_info.get("fallback_reason"):
+                    with st.expander("Motivo do fallback local", expanded=False):
+                        st.code(source_info["fallback_reason"])
 
             st.subheader("Resumo da execução")
             summary = result["summary"]
@@ -458,19 +681,8 @@ try:
 
         else:
             st.error("A execução automática falhou.")
-            st.code(result["error"])
-
-            with st.expander("Logs da execução", expanded=True):
-                for msg in result["logs"]:
-                    st.text(msg)
-
-except FileNotFoundError as exc:
-    st.error("Não foi possível localizar um arquivo RMD válido.")
-    st.info(
-        f"Verifique se existe pelo menos um arquivo .xlsx compatível dentro da pasta '{rmd_search_dir}'."
-    )
-    st.code(str(exc))
+            st.code(result.get("error", "Erro não detalhado."))
 
 except Exception as exc:
-    st.error("Ocorreu um erro inesperado na inicialização do dashboard.")
+    st.error("Não foi possível inicializar o dashboard.")
     st.code(str(exc))
