@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import os
-import tempfile
 import logging
-from pathlib import Path
+import re
+import unicodedata
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -23,6 +23,9 @@ from rd_data_multiarquivo.exporters import (
 from rd_data_multiarquivo.naming import standardize_column_names
 
 
+# =========================
+# Logging para interface
+# =========================
 class StreamlitLogHandler(logging.Handler):
     def __init__(self):
         super().__init__()
@@ -33,13 +36,228 @@ class StreamlitLogHandler(logging.Handler):
         self.messages.append(msg)
 
 
-def prepare_preview_df(df: pd.DataFrame, mode: str, max_rows: int) -> pd.DataFrame:
+# =========================
+# Utilidades de texto / nome
+# =========================
+def normalize_text(text: str) -> str:
+    text = str(text).strip().lower()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return text
+
+
+def month_name_to_number(token: str) -> int | None:
+    token = normalize_text(token)
+
+    month_map = {
+        "jan": 1,
+        "janeiro": 1,
+        "fev": 2,
+        "fevereiro": 2,
+        "mar": 3,
+        "marco": 3,
+        "abr": 4,
+        "abril": 4,
+        "mai": 5,
+        "maio": 5,
+        "jun": 6,
+        "junho": 6,
+        "jul": 7,
+        "julho": 7,
+        "ago": 8,
+        "agosto": 8,
+        "set": 9,
+        "setembro": 9,
+        "out": 10,
+        "outubro": 10,
+        "nov": 11,
+        "novembro": 11,
+        "dez": 12,
+        "dezembro": 12,
+    }
+
+    return month_map.get(token)
+
+
+def is_excel_temp_file(path: Path) -> bool:
+    name = path.name
+    return name.startswith("~$")
+
+
+def is_hidden_file(path: Path) -> bool:
+    return path.name.startswith(".")
+
+
+def looks_like_rmd_file(path: Path) -> bool:
     """
-    Prepara o DataFrame para preview no Streamlit.
-    mode:
-      - 'recentes'
-      - 'antigas'
-      - 'completo'
+    Critério amplo, mas seguro, para reconhecer candidatos a RMD.
+    """
+    if not path.is_file():
+        return False
+    if path.suffix.lower() != ".xlsx":
+        return False
+    if is_excel_temp_file(path):
+        return False
+    if is_hidden_file(path):
+        return False
+
+    name = normalize_text(path.stem)
+
+    # Aceita variações comuns
+    keywords = ["rmd", "anexo_rmd", "anexo-rmd", "anexo rmd", "divida", "dpf"]
+    return any(k in name for k in keywords)
+
+
+def parse_rmd_month_year_from_name(file_path: Path) -> tuple[int, int] | None:
+    """
+    Tenta extrair (ano, mês) do nome do arquivo.
+
+    Exemplos aceitos:
+      - Anexo_RMD_Janeiro_26.xlsx
+      - Anexo-RMD-Fev-2026.xlsx
+      - RMD mar 25.xlsx
+      - rmd_abril_2024_final.xlsx
+      - anexo.rmd.dez.2023.xlsx
+    """
+    stem = normalize_text(file_path.stem)
+
+    tokens = [t for t in re.split(r"[_\-\s\.]+", stem) if t]
+
+    month_num = None
+    year_num = None
+
+    for token in tokens:
+        if month_num is None:
+            maybe_month = month_name_to_number(token)
+            if maybe_month is not None:
+                month_num = maybe_month
+                continue
+
+        if year_num is None and re.fullmatch(r"\d{2}|\d{4}", token):
+            y = int(token)
+            year_num = 2000 + y if y < 100 else y
+
+    if month_num is not None and year_num is not None:
+        return year_num, month_num
+
+    month_regex = (
+        r"(jan(?:eiro)?|fev(?:ereiro)?|mar(?:co)?|abr(?:il)?|mai(?:o)?|"
+        r"jun(?:ho)?|jul(?:ho)?|ago(?:sto)?|set(?:embro)?|out(?:ubro)?|"
+        r"nov(?:embro)?|dez(?:embro)?)"
+    )
+    year_regex = r"(\d{2}|\d{4})"
+
+    match = re.search(month_regex + r".*?" + year_regex, stem)
+    if not match:
+        match = re.search(year_regex + r".*?" + month_regex, stem)
+
+    if match:
+        parts = match.groups()
+        month_token = None
+        year_token = None
+
+        for part in parts:
+            if re.fullmatch(r"\d{2}|\d{4}", part):
+                year_token = part
+            else:
+                month_token = part
+
+        if month_token and year_token:
+            m = month_name_to_number(month_token)
+            y = int(year_token)
+            y = 2000 + y if y < 100 else y
+            if m is not None:
+                return y, m
+
+    return None
+
+
+def discover_rmd_candidates(rmd_dir: Path) -> list[Path]:
+    """
+    Procura recursivamente candidatos a RMD dentro da pasta.
+    """
+    if not rmd_dir.exists():
+        raise FileNotFoundError(f"Pasta de RMD não encontrada: {rmd_dir}")
+
+    files = [p for p in rmd_dir.rglob("*.xlsx") if looks_like_rmd_file(p)]
+    return sorted(files)
+
+
+def build_rmd_rank(path: Path) -> tuple:
+    """
+    Monta um rank robusto para escolher o arquivo "mais recente".
+
+    Prioridade:
+    1) arquivo com mês/ano inferíveis do nome;
+    2) maior ano;
+    3) maior mês;
+    4) maior data de modificação;
+    5) nome (desempate estável).
+    """
+    parsed = parse_rmd_month_year_from_name(path)
+    mtime = path.stat().st_mtime
+    normalized_name = normalize_text(path.name)
+
+    if parsed is not None:
+        year_num, month_num = parsed
+        return (2, year_num, month_num, mtime, normalized_name)
+
+    return (1, 0, 0, mtime, normalized_name)
+
+
+def find_latest_rmd_file(rmd_dir: str | Path = "rmd") -> Path:
+    """
+    Detecta o RMD mais recente de forma blindada.
+    """
+    rmd_dir = Path(rmd_dir)
+
+    candidates = discover_rmd_candidates(rmd_dir)
+    if not candidates:
+        raise FileNotFoundError(
+            f"Nenhum arquivo RMD válido (.xlsx) foi encontrado em: {rmd_dir}"
+        )
+
+    ranked = [(build_rmd_rank(p), p) for p in candidates]
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    return ranked[0][1]
+
+
+def current_rmd_signature(path: Path) -> str:
+    """
+    Assinatura do arquivo para detectar mudança automática e rerodar.
+    """
+    stat = path.stat()
+    return f"{path.resolve()}|{int(stat.st_mtime)}|{stat.st_size}"
+
+
+def get_rmd_search_dir_from_config(cfg: dict) -> Path:
+    """
+    Deriva a pasta-base de busca a partir do ARQUIVO_RMD configurado.
+    Se o config vier como 'rmd/arquivo.xlsx', usa 'rmd/'.
+    Se vier vazio ou inválido, usa 'rmd/'.
+    """
+    configured = str(cfg.get("ARQUIVO_RMD", "")).strip()
+
+    if not configured:
+        return Path("rmd")
+
+    p = Path(configured)
+
+    # Se apontar para arquivo, buscamos na pasta pai
+    if p.suffix:
+        parent = p.parent
+        return parent if str(parent) not in ("", ".") else Path("rmd")
+
+    # Se apontar para diretório
+    return p
+
+
+# =========================
+# Preview das abas
+# =========================
+def prepare_preview_df(df: pd.DataFrame, max_rows: int = 50) -> pd.DataFrame:
+    """
+    Mostra automaticamente as linhas mais recentes.
     """
     df_view = df.copy()
 
@@ -58,85 +276,33 @@ def prepare_preview_df(df: pd.DataFrame, mode: str, max_rows: int) -> pd.DataFra
 
     if date_col:
         df_view[date_col] = pd.to_datetime(df_view[date_col], errors="coerce")
-        if mode == "recentes":
-            df_view = df_view.sort_values(date_col, ascending=False).head(max_rows)
-        elif mode == "antigas":
-            df_view = df_view.sort_values(date_col, ascending=True).head(max_rows)
-        elif mode == "completo":
-            df_view = df_view.sort_values(date_col, ascending=False)
-
+        df_view = (
+            df_view.sort_values(date_col, ascending=False)
+            .head(max_rows)
+            .reset_index(drop=True)
+        )
     elif year_col:
         df_view[year_col] = pd.to_numeric(df_view[year_col], errors="coerce")
-        if mode == "recentes":
-            df_view = df_view.sort_values(year_col, ascending=False).head(max_rows)
-        elif mode == "antigas":
-            df_view = df_view.sort_values(year_col, ascending=True).head(max_rows)
-        elif mode == "completo":
-            df_view = df_view.sort_values(year_col, ascending=False)
-
+        df_view = (
+            df_view.sort_values(year_col, ascending=False)
+            .head(max_rows)
+            .reset_index(drop=True)
+        )
     else:
-        if mode == "recentes":
-            df_view = df_view.tail(max_rows)
-        elif mode == "antigas":
-            df_view = df_view.head(max_rows)
-        elif mode == "completo":
-            df_view = df_view.copy()
+        df_view = df_view.tail(max_rows).reset_index(drop=True)
 
-    return df_view.reset_index(drop=True)
+    return df_view
 
 
-def run_pipeline(
-    rmd_uploaded_file,
-    use_repo_rmd: bool,
-    repo_rmd_path: str,
-    output_name: str,
-    start_sgs: str,
-    days_daily_sgs: int,
-    mes_alvo: str,
-    ano_inicio_rmd: int,
-    aba_rmd: str,
-    rmd_extraction_mode: str,
-):
+# =========================
+# Execução automática
+# =========================
+def run_pipeline_auto(latest_rmd: Path):
+    """
+    Executa o pipeline automaticamente usando o RMD detectado.
+    """
     cfg = get_config()
-
-    cfg["OUTPUT_NAME"] = output_name
-    cfg["START_SGS"] = start_sgs
-    cfg["DAYS_DAILY_SGS"] = int(days_daily_sgs)
-    cfg["MES_ALVO"] = mes_alvo
-    cfg["ANO_INICIO_RMD"] = int(ano_inicio_rmd)
-    cfg["ABA_RMD"] = aba_rmd
-    cfg["RMD_EXTRACTION_MODE"] = rmd_extraction_mode
-
-    tmp_path = None
-
-    if use_repo_rmd:
-        if not repo_rmd_path or not repo_rmd_path.strip():
-            raise ValueError("O caminho do RMD no repositório está vazio.")
-
-        repo_file = Path(repo_rmd_path.strip())
-
-        if not repo_file.exists():
-            raise FileNotFoundError(
-                f"Arquivo RMD não encontrado no repositório: {repo_file}"
-            )
-
-        cfg["ARQUIVO_RMD"] = str(repo_file)
-
-    else:
-        if rmd_uploaded_file is None:
-            raise ValueError("Nenhum arquivo RMD foi enviado.")
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-            tmp.write(rmd_uploaded_file.getbuffer())
-            tmp_path = tmp.name
-
-        cfg["ARQUIVO_RMD"] = tmp_path
-
-        logger.info("Caminho final do ARQUIVO_RMD: %s", cfg.get("ARQUIVO_RMD"))
-
-    if not cfg.get("ARQUIVO_RMD"):
-        raise ValueError("ARQUIVO_RMD não foi definido antes da coleta.")
-
+    cfg["ARQUIVO_RMD"] = str(latest_rmd)
     cfg["LOG_TO_CONSOLE"] = False
     cfg["LOG_TO_FILE"] = True
 
@@ -152,15 +318,14 @@ def run_pipeline(
     started_at = datetime.now().timestamp()
 
     try:
-        logger.info("Iniciando execução pelo Streamlit.")
-        validate_config(cfg)
-        logger.info("Caminho final do ARQUIVO_RMD: %s", cfg.get("ARQUIVO_RMD"))
+        logger.info("Iniciando execução automática pelo Streamlit.")
+        logger.info("Arquivo RMD detectado automaticamente: %s", cfg["ARQUIVO_RMD"])
 
-        if not cfg.get("ARQUIVO_RMD"):
-            raise ValueError("ARQUIVO_RMD não foi definido antes da coleta.")
-    
+        validate_config(cfg)
+
         raw = collect_data(cfg, logger)
         processed, warnings = process_data(raw, cfg, logger)
+
         export_tables = build_export_tables(processed, logger)
         export_tables = standardize_column_names(export_tables, logger)
 
@@ -178,8 +343,10 @@ def run_pipeline(
         with open(output_path, "rb") as f:
             excel_bytes = f.read()
 
-        result = {
+        return {
             "success": True,
+            "detected_rmd": str(latest_rmd),
+            "detected_rmd_signature": current_rmd_signature(latest_rmd),
             "export_tables": export_tables,
             "warnings": warnings,
             "summary": summary,
@@ -189,23 +356,19 @@ def run_pipeline(
         }
 
     except Exception as exc:
-        logger.exception("Falha na execução: %s", exc)
-        result = {
+        logger.exception("Falha na execução automática: %s", exc)
+        return {
             "success": False,
+            "detected_rmd": str(latest_rmd),
+            "detected_rmd_signature": current_rmd_signature(latest_rmd),
             "error": str(exc),
             "logs": st_handler.messages,
         }
 
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
 
-    return result
-
-
+# =========================
+# Interface
+# =========================
 st.set_page_config(
     page_title="RD Data Dashboard",
     page_icon="📊",
@@ -213,196 +376,101 @@ st.set_page_config(
 )
 
 st.title("📊 RD Data Dashboard")
-st.caption("Interface Streamlit para executar o pipeline e visualizar os dados processados.")
-
-st.sidebar.header("Parâmetros de execução")
+st.caption(
+    "Execução automática do pipeline com detecção blindada do RMD mais recente."
+)
 
 default_cfg = get_config()
+rmd_search_dir = get_rmd_search_dir_from_config(default_cfg)
 
-use_repo_rmd = st.sidebar.checkbox(
-    "Usar RMD padrão do repositório",
-    value=True,
-)
+try:
+    latest_rmd = find_latest_rmd_file(rmd_search_dir)
+    latest_signature = current_rmd_signature(latest_rmd)
 
-repo_rmd_path = st.sidebar.text_input(
-    "Caminho do RMD no repositório",
-    value=default_cfg.get("ARQUIVO_RMD", "rmd/Anexo_RMD_Janeiro_26.xlsx"),
-)
-
-uploaded_rmd = None
-if not use_repo_rmd:
-    uploaded_rmd = st.sidebar.file_uploader(
-        "Envie o arquivo RMD (.xlsx)",
-        type=["xlsx"],
+    should_run = (
+        "rd_result" not in st.session_state
+        or st.session_state.get("rd_result", {}).get("detected_rmd_signature") != latest_signature
     )
 
-output_name = st.sidebar.text_input(
-    "Nome do arquivo Excel de saída",
-    value=default_cfg.get("OUTPUT_NAME", "Recent Developments Data.xlsx"),
-)
+    if should_run:
+        with st.spinner("Localizando o RMD mais recente e executando o pipeline..."):
+            st.session_state["rd_result"] = run_pipeline_auto(latest_rmd)
 
-start_sgs = st.sidebar.text_input(
-    "Data inicial do SGS",
-    value=default_cfg.get("START_SGS", "2019-01-01"),
-)
+    result = st.session_state.get("rd_result")
 
-days_daily_sgs = st.sidebar.number_input(
-    "Janela diária SGS (dias)",
-    min_value=1,
-    max_value=60,
-    value=int(default_cfg.get("DAYS_DAILY_SGS", 7)),
-    step=1,
-)
+    if result:
+        if result["success"]:
+            st.success("Pipeline executado com sucesso.")
+            st.info(f"Arquivo RMD detectado automaticamente: {result['detected_rmd']}")
 
-mes_alvo = st.sidebar.selectbox(
-    "Mês-alvo do RMD (usado apenas no modo 'mês-alvo')",
-    options=["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"],
-    index=["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"].index(
-        default_cfg.get("MES_ALVO", "Dez")
-    ),
-)
+            st.subheader("Resumo da execução")
+            summary = result["summary"]
 
-ano_inicio_rmd = st.sidebar.number_input(
-    "Ano inicial do RMD",
-    min_value=2000,
-    max_value=2100,
-    value=int(default_cfg.get("ANO_INICIO_RMD", 2020)),
-    step=1,
-)
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Abas exportadas", summary.get("sheet_count", 0))
+            col2.metric("Linhas exportadas", summary.get("total_rows_exported", 0))
+            col3.metric("Colunas exportadas", summary.get("total_columns_exported", 0))
+            col4.metric("Avisos", summary.get("warning_count", 0))
 
-aba_rmd = st.sidebar.text_input(
-    "Aba do RMD",
-    value=default_cfg.get("ABA_RMD", "2.1"),
-)
+            with st.expander("Detalhes do resumo", expanded=False):
+                st.json(summary)
 
-rmd_extraction_mode_label = st.sidebar.selectbox(
-    "Modo de extração anual do DPF",
-    options=[
-        "Último mês disponível por ano",
-        "Mês-alvo por ano",
-    ],
-    index=0,
-)
-
-rmd_extraction_mode = (
-    "ultimo_disponivel"
-    if rmd_extraction_mode_label == "Último mês disponível por ano"
-    else "mes_alvo"
-)
-
-run_button = st.sidebar.button("Executar pipeline", type="primary")
-
-if run_button:
-    if not use_repo_rmd and uploaded_rmd is None:
-        st.error("Envie primeiro o arquivo RMD (.xlsx) ou marque o uso do RMD do repositório.")
-    else:
-        with st.spinner("Executando coleta, processamento e exportação..."):
-            result = run_pipeline(
-                rmd_uploaded_file=uploaded_rmd,
-                use_repo_rmd=use_repo_rmd,
-                repo_rmd_path=repo_rmd_path,
-                output_name=output_name,
-                start_sgs=start_sgs,
-                days_daily_sgs=days_daily_sgs,
-                mes_alvo=mes_alvo,
-                ano_inicio_rmd=ano_inicio_rmd,
-                aba_rmd=aba_rmd,
-                rmd_extraction_mode=rmd_extraction_mode,
+            st.download_button(
+                label="📥 Baixar Excel gerado",
+                data=result["excel_bytes"],
+                file_name=Path(summary["output_excel"]).name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-        st.session_state["rd_result"] = result
+            if result["warnings"]:
+                st.subheader("Avisos de validação")
+                for w in result["warnings"]:
+                    st.warning(w)
 
-result = st.session_state.get("rd_result")
+            with st.expander("Logs da execução", expanded=False):
+                for msg in result["logs"]:
+                    st.text(msg)
 
-if result:
-    if result["success"]:
-        st.success("Pipeline executado com sucesso.")
+            st.subheader("Pré-visualização das abas")
+            st.caption("Exibindo automaticamente até 50 linhas mais recentes por aba.")
 
-        st.subheader("Resumo da execução")
-        summary = result["summary"]
+            export_tables = result["export_tables"]
+            tab_names = list(export_tables.keys())
+            tabs = st.tabs(tab_names)
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Abas exportadas", summary.get("sheet_count", 0))
-        col2.metric("Linhas exportadas", summary.get("total_rows_exported", 0))
-        col3.metric("Colunas exportadas", summary.get("total_columns_exported", 0))
-        col4.metric("Avisos", summary.get("warning_count", 0))
+            for tab, sheet_name in zip(tabs, tab_names):
+                with tab:
+                    df = export_tables[sheet_name]
+                    df_view = prepare_preview_df(df, max_rows=50)
 
-        with st.expander("Detalhes do resumo", expanded=False):
-            st.json(summary)
+                    st.write(f"**Aba:** {sheet_name}")
+                    st.write(f"Linhas: {len(df)} | Colunas: {len(df.columns)}")
+                    st.dataframe(df_view, use_container_width=True)
 
-        st.download_button(
-            label="📥 Baixar Excel gerado",
-            data=result["excel_bytes"],
-            file_name=Path(summary["output_excel"]).name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-        if result["warnings"]:
-            st.subheader("Avisos de validação")
-            for w in result["warnings"]:
-                st.warning(w)
-
-        with st.expander("Logs da execução", expanded=False):
-            for msg in result["logs"]:
-                st.text(msg)
-
-        st.subheader("Pré-visualização das abas")
-        export_tables = result["export_tables"]
-
-        tab_names = list(export_tables.keys())
-        tabs = st.tabs(tab_names)
-
-        for tab, sheet_name in zip(tabs, tab_names):
-            with tab:
-                df = export_tables[sheet_name]
-
-                st.write(f"**Aba:** {sheet_name}")
-                st.write(f"Linhas: {len(df)} | Colunas: {len(df.columns)}")
-
-                col_a, col_b = st.columns([2, 1])
-
-                with col_a:
-                    modo_visualizacao = st.selectbox(
-                        "Visualização",
-                        options=["recentes", "antigas", "completo"],
-                        index=0,
-                        key=f"modo_{sheet_name}",
-                        format_func=lambda x: {
-                            "recentes": "Mais recentes primeiro",
-                            "antigas": "Mais antigas primeiro",
-                            "completo": "Tabela completa",
-                        }[x],
+                    csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
+                    st.download_button(
+                        label=f"Baixar CSV da aba {sheet_name}",
+                        data=csv_bytes,
+                        file_name=f"{sheet_name}.csv",
+                        mime="text/csv",
+                        key=f"csv_{sheet_name}",
                     )
 
-                with col_b:
-                    max_rows = st.number_input(
-                        "Linhas",
-                        min_value=5,
-                        max_value=500,
-                        value=50,
-                        step=5,
-                        key=f"max_rows_{sheet_name}",
-                    )
+        else:
+            st.error("A execução automática falhou.")
+            st.code(result["error"])
 
-                df_view = prepare_preview_df(df, modo_visualizacao, max_rows)
-                st.dataframe(df_view, use_container_width=True)
+            with st.expander("Logs da execução", expanded=True):
+                for msg in result["logs"]:
+                    st.text(msg)
 
-                csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
-                st.download_button(
-                    label=f"Baixar CSV da aba {sheet_name}",
-                    data=csv_bytes,
-                    file_name=f"{sheet_name}.csv",
-                    mime="text/csv",
-                    key=f"csv_{sheet_name}",
-                )
+except FileNotFoundError as exc:
+    st.error("Não foi possível localizar um arquivo RMD válido.")
+    st.info(
+        f"Verifique se existe pelo menos um arquivo .xlsx compatível dentro da pasta '{rmd_search_dir}'."
+    )
+    st.code(str(exc))
 
-    else:
-        st.error("A execução falhou.")
-        st.code(result["error"])
-
-        with st.expander("Logs da execução", expanded=True):
-            for msg in result["logs"]:
-                st.text(msg)
-
-else:
-    st.info("Envie o arquivo RMD, ajuste os parâmetros na barra lateral e clique em **Executar pipeline**.")
+except Exception as exc:
+    st.error("Ocorreu um erro inesperado na inicialização do dashboard.")
+    st.code(str(exc))
